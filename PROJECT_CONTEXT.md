@@ -31,8 +31,10 @@ This document captures important context, decisions, and setup information for c
 9. **trade_lifecycle.py** — Position monitoring and management
 
 ### Strategy Modules
-- **strategies/micro_strangle.py** — Micro strangle live test strategy
+- **strategies/blueprint_strangle.py** — Blueprint strangle strategy (starting template for new strategies)
 - **strategies/rfq_endurance.py** — 3-cycle RFQ endurance test strategy with UTC scheduling
+- **strategies/reverse_iron_condor_live.py** — Reverse iron condor live trading strategy
+- **strategies/long_strangle_pnl_test.py** — Long strangle PnL monitoring test
 
 ---
 

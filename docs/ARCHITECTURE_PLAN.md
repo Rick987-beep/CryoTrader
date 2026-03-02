@@ -88,7 +88,9 @@ CoincallTrader/
 ├── health_check.py         # HealthChecker: background health logging every 5 minutes
 ├── strategies/
 │   ├── __init__.py
-│   ├── micro_strangle.py   # Micro strangle live test strategy
+│   ├── blueprint_strangle.py  # Blueprint strategy — starting template for traders
+│   ├── long_strangle_pnl_test.py  # Long strangle PnL monitoring test
+│   ├── reverse_iron_condor_live.py  # Reverse iron condor live trading
 │   └── rfq_endurance.py    # 3-cycle RFQ endurance test strategy
 ├── requirements.txt
 ├── .env                    # API keys (gitignored)
