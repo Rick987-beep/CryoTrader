@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-03-02
+
+### Added - Configurable Execution Timing & RFQ Parameters
+
+#### ExecutionPhase — Phased Limit Order Pricing (`trade_execution.py`)
+- **`ExecutionPhase` dataclass** — Declarative pricing phase for limit orders. Fields: `pricing` (`"aggressive"` | `"mid"` | `"top_of_book"` | `"mark"`), `duration_seconds` (min 10s), `buffer_pct`, `reprice_interval` (min 10s).
+- **`ExecutionParams.phases`** — Optional `List[ExecutionPhase]` on `ExecutionParams`. When set, `LimitFillManager` uses phased execution instead of legacy single-mode behavior.
+- **`LimitFillManager` phased execution** — Rewrote with `_check_phased()` / `_check_legacy()` split. Phase-aware pricing via `_get_phased_price()` supports four pricing modes, automatic phase advancement on duration expiry, per-phase reprice intervals. Legacy mode preserved when `phases=None`.
+
+#### RFQParams — Typed RFQ Configuration (`trade_lifecycle.py`)
+- **`RFQParams` dataclass** — Typed container replacing loose metadata keys. Fields: `timeout_seconds` (default 60), `min_improvement_pct` (default -999), `fallback_mode` (default None).
+- **`TradeLifecycle.execution_params`** and **`TradeLifecycle.rfq_params`** — Optional typed fields on the trade object. `LifecycleManager` reads from these first, falls back to `metadata` dict for backward compatibility.
+
+#### Wiring Through Strategy Layer (`strategy.py`, `strategies/blueprint_strangle.py`)
+- **`StrategyConfig.execution_params`** and **`StrategyConfig.rfq_params`** — Optional fields that flow through to `LifecycleManager.create()`.
+- **`blueprint_strangle.py`** — Updated docstring and added commented-out examples for phased execution and RFQ params configuration.
+
+### Testing
+- **`tests/test_execution_timing.py`** (NEW) — 40/40 assertions covering ExecutionPhase validation, ExecutionParams legacy/phased modes, RFQParams defaults/custom, TradeLifecycle new fields, StrategyConfig new fields, LimitFillManager initialization.
+- Existing test suites pass: `test_strategy_framework.py` 72/72, `test_strategy_layer.py` 49/50 (1 pre-existing 0DTE market data failure).
+
+### Files Changed
+- MODIFIED: `trade_execution.py` (+200 lines, ExecutionPhase, phased LimitFillManager)
+- MODIFIED: `trade_lifecycle.py` (+40 lines, RFQParams, typed param fields)
+- MODIFIED: `strategy.py` (+8 lines, wiring execution_params/rfq_params)
+- MODIFIED: `strategies/blueprint_strangle.py` (+20 lines, documentation and examples)
+- NEW: `tests/test_execution_timing.py` (159 lines, 40 assertions)
+
+### Backward Compatibility
+All new fields default to `None`. Existing strategies, metadata-based configuration, and the state machine are fully preserved.
+
+---
+
 ## [0.6.0] - 2026-02-24
 
 ### Added - Phase 1 & 2 Hardening (48-Hour Reliability)

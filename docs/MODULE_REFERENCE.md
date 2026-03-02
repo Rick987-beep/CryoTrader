@@ -1,6 +1,6 @@
 # CoincallTrader — Module Reference
 
-**Last Updated:** February 24, 2026
+**Last Updated:** March 2, 2026
 
 Internal documentation for the CoincallTrader application modules.
 For Coincall exchange API endpoints, see [API_REFERENCE.md](API_REFERENCE.md).
@@ -84,7 +84,7 @@ ctx.position_monitor.start()
 | Class | Purpose |
 |-------|---------|
 | `TradingContext` | DI container: auth, market_data, executor, rfq_executor, smart_executor, account_manager, position_monitor, lifecycle_manager |
-| `StrategyConfig` | Declarative definition: name, legs, entry/exit conditions, execution_mode, max_concurrent, max_trades_per_day, cooldown, on_trade_closed |
+| `StrategyConfig` | Declarative definition: name, legs, entry/exit conditions, execution_mode, max_concurrent, max_trades_per_day, cooldown, execution_params, rfq_params, on_trade_closed |
 | `StrategyRunner` | Tick-driven executor: checks entries, resolves legs, creates trades, delegates to LifecycleManager. Exposes `stats` property. |
 
 ### Entry Condition Factories
@@ -229,8 +229,9 @@ lifecycle_manager.force_close(trade.trade_id)
 |-------|---------|
 | `TradeState` | Enum: PENDING_OPEN → OPENING → OPEN → PENDING_CLOSE → CLOSING → CLOSED \| FAILED |
 | `TradeLeg` | Single leg: symbol, qty, side, order_id, fill_price, filled_qty |
-| `TradeLifecycle` | Groups legs with exit conditions; computes PnL, Greeks (pro-rated by our qty share) |
+| `TradeLifecycle` | Groups legs with exit conditions; computes PnL, Greeks (pro-rated by our qty share). Optional `execution_params` and `rfq_params` typed fields. |
 | `LifecycleManager` | State machine: `create()`, `open()`, `close()`, `tick()`, `force_close()` |
+| `RFQParams` | Typed RFQ config: `timeout_seconds`, `min_improvement_pct`, `fallback_mode` |
 
 ### Exit Condition Factories
 | Factory | Signature | Description |
@@ -249,6 +250,99 @@ The lifecycle tracks our filled quantity vs. the exchange's total position quant
 - `_our_share(leg, pos)` = `our_filled_qty / exchange_total_qty` (clamped to [0, 1])
 - Applied to `structure_pnl()`, `structure_delta()`, `structure_greeks()`
 - Prevents contamination when the account has positions from other sources
+
+### RFQParams Dataclass
+
+Typed container for RFQ execution parameters, replacing loose `metadata` keys:
+
+```python
+from trade_lifecycle import RFQParams
+
+rfq_params = RFQParams(
+    timeout_seconds=300,        # Wait up to 5 minutes for quotes
+    min_improvement_pct=2.0,    # Require 2% improvement vs orderbook
+    fallback_mode="limit",      # Fall back to limit orders if RFQ fails
+)
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `timeout_seconds` | `float` | `60.0` | How long to wait for RFQ quotes |
+| `min_improvement_pct` | `float` | `-999.0` | Minimum improvement vs orderbook (-999 = accept anything) |
+| `fallback_mode` | `str\|None` | `None` | What to do if RFQ fails (e.g., `"limit"`) |
+
+---
+
+## Trade Execution — Configurable Timing
+
+See [trade_execution.py](../trade_execution.py) for the implementation.
+
+### ExecutionPhase Dataclass
+
+Declares a pricing phase for the `LimitFillManager`. Multiple phases can be sequenced to start conservatively and escalate:
+
+```python
+from trade_execution import ExecutionPhase, ExecutionParams
+
+params = ExecutionParams(phases=[
+    ExecutionPhase(pricing="mark",       duration_seconds=300, reprice_interval=30),
+    ExecutionPhase(pricing="mid",        duration_seconds=120, reprice_interval=20),
+    ExecutionPhase(pricing="aggressive", duration_seconds=60,  buffer_pct=3.0),
+])
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `pricing` | `str` | `"aggressive"` | Pricing mode: `"aggressive"`, `"mid"`, `"top_of_book"`, `"mark"` |
+| `duration_seconds` | `float` | `30.0` | How long this phase lasts (min 10s, auto-clamped) |
+| `buffer_pct` | `float` | `2.0` | Buffer % for aggressive pricing |
+| `reprice_interval` | `float` | `30.0` | Seconds between reprices in this phase (min 10s) |
+
+### Pricing Modes
+
+| Mode | Buy Price | Sell Price | Use Case |
+|------|-----------|------------|----------|
+| `"mark"` | Mark price | Mark price | Most patient; wait for fair value |
+| `"mid"` | (bid+ask)/2 | (bid+ask)/2 | Balanced |
+| `"top_of_book"` | Best ask | Best bid | Match best available |
+| `"aggressive"` | Best ask × (1 + buffer%) | Best bid × (1 - buffer%) | Cross the spread; fastest fill |
+
+### Phased vs Legacy Mode
+
+- **Legacy** (`phases=None`): Single aggressive mode with `fill_timeout_seconds` and `max_requote_rounds`. This is the default.
+- **Phased** (`phases=[...]`): LimitFillManager walks through each phase in sequence. When a phase’s `duration_seconds` expires, it advances to the next phase. After the last phase, the fill manager signals expiry.
+
+### ExecutionParams Dataclass
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `fill_timeout_seconds` | `float` | `30.0` | Fill timeout per round (legacy mode) |
+| `aggressive_buffer_pct` | `float` | `2.0` | Aggressive buffer % (legacy mode) |
+| `max_requote_rounds` | `int` | `10` | Max requote rounds (legacy mode) |
+| `phases` | `list[ExecutionPhase]\|None` | `None` | Phased execution config (overrides legacy) |
+
+### Complete Strategy Example
+
+```python
+from strategy import StrategyConfig
+from option_selection import strangle
+from trade_execution import ExecutionParams, ExecutionPhase
+from trade_lifecycle import RFQParams, profit_target, max_hold_hours
+
+config = StrategyConfig(
+    name="patient_strangle",
+    legs=strangle(qty=0.01, call_delta=0.15, put_delta=-0.15, dte="next", side=1),
+    execution_mode="limit",
+    execution_params=ExecutionParams(phases=[
+        ExecutionPhase(pricing="mark",       duration_seconds=300, reprice_interval=30),
+        ExecutionPhase(pricing="mid",        duration_seconds=120, reprice_interval=20),
+        ExecutionPhase(pricing="aggressive", duration_seconds=60,  buffer_pct=2.0),
+    ]),
+    rfq_params=RFQParams(timeout_seconds=120, min_improvement_pct=1.0),
+    exit_conditions=[profit_target(50), max_hold_hours(4)],
+    max_trades_per_day=1,
+)
+```
 
 ---
 

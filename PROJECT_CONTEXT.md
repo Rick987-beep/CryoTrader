@@ -1,6 +1,6 @@
 # CoincallTrader — Project Context & Knowledge Base
 
-**Last Updated:** 24 February 2026  
+**Last Updated:** 2 March 2026  
 **Maintainer:** Ulrik Deichsel
 
 This document captures important context, decisions, and setup information for continuity when working on different machines or with AI assistants.
@@ -10,9 +10,10 @@ This document captures important context, decisions, and setup information for c
 ## 🎯 Project Overview
 
 **Purpose:** Automated options trading bot for Coincall exchange  
-**Language:** Python 3.11+  
-**Architecture:** Event-driven with position monitoring loop  
-**Deployment Target:** Windows Server 2022 VPS (primary), also runs on macOS locally
+**Language:** Python 3.9+  
+**Architecture:** Tick-driven with position monitoring loop  
+**Deployment Target:** Windows Server 2022 VPS (primary), also runs on macOS locally  
+**Current Version:** 0.7.0 — Configurable Execution Timing
 
 ---
 
@@ -21,20 +22,25 @@ This document captures important context, decisions, and setup information for c
 ### Core Components
 
 1. **main.py** — Entry point, wires everything together, runs position monitor loop
-2. **strategy.py** — Strategy framework and TradingContext
+2. **strategy.py** — Strategy framework, TradingContext DI, StrategyConfig, StrategyRunner
 3. **config.py** — Environment configuration (testnet/production switching)
-4. **auth.py** — API authentication and request signing
-5. **market_data.py** — Market data fetching and caching
-6. **option_selection.py** — Option filtering and selection logic
-7. **trade_execution.py** — Order placement and management
-8. **rfq.py** — Request-for-Quote handling
-9. **trade_lifecycle.py** — Position monitoring and management
+4. **auth.py** — API authentication and request signing (with timeouts & retries)
+5. **retry.py** — @retry decorator with exponential backoff
+6. **market_data.py** — Market data fetching and caching (30s TTL)
+7. **option_selection.py** — Option filtering, selection logic, LegSpec, find_option()
+8. **trade_execution.py** — Order placement, LimitFillManager (with phased pricing), ExecutionPhase, ExecutionParams
+9. **rfq.py** — Request-for-Quote handling ($50k+ notional)
+10. **trade_lifecycle.py** — Trade state machine, LifecycleManager, RFQParams, exit conditions
+11. **multileg_orderbook.py** — Smart chunked multi-leg execution
+12. **account_manager.py** — AccountSnapshot, PositionMonitor, margin/equity queries
+13. **persistence.py** — Trade state persistence (JSON snapshots for crash recovery)
+14. **health_check.py** — Background health check logging (5-min intervals)
 
 ### Strategy Modules
 - **strategies/blueprint_strangle.py** — Blueprint strangle strategy (starting template for new strategies)
-- **strategies/rfq_endurance.py** — 3-cycle RFQ endurance test strategy with UTC scheduling
 - **strategies/reverse_iron_condor_live.py** — Reverse iron condor live trading strategy
 - **strategies/long_strangle_pnl_test.py** — Long strangle PnL monitoring test
+- **strategies/rfq_endurance.py** — 3-cycle RFQ endurance test strategy with UTC scheduling
 
 ---
 
@@ -61,7 +67,7 @@ COINCALL_API_SECRET_PROD=...
 ## 💻 Development Environment
 
 ### Local (macOS)
-- Python 3.11+ in virtual environment (.venv)
+- Python 3.9+ in virtual environment (.venv)
 - Dependencies: requests, python-dotenv, websockets (see requirements.txt)
 - Development and testing happens here
 - VS Code with GitHub Copilot
@@ -84,11 +90,8 @@ COINCALL_API_SECRET_PROD=...
 - **Restart Policy:** Auto-restart on failure with 5-second delay
 
 ### Deployment Scripts (deployment/)
-1. **setup.ps1** — Automated setup and service installation
-2. **health_check.ps1** — Service health monitoring (runs every 15 min)
-3. **rotate_logs.ps1** — Log rotation (runs daily at 2 AM)
-4. **monitor_dashboard.ps1** — Real-time status dashboard
-5. **SETUP_WIZARD.bat** — Double-click installer
+1. **health_check.ps1** — Service health monitoring (runs every 15 min)
+2. **monitor_dashboard.ps1** — Real-time status dashboard
 
 ### Deployment Workflow
 1. Develop locally on Mac
@@ -228,10 +231,6 @@ Get-Content logs\trading.log -Tail 20 -Wait
 
 ### Deployment Docs
 - [WINDOWS_DEPLOYMENT.md](deployment/WINDOWS_DEPLOYMENT.md) — Full deployment guide
-- [deployment/CHECKLIST.md](deployment/CHECKLIST.md) — Deployment verification checklist
-- [deployment/QUICK_REFERENCE.md](deployment/QUICK_REFERENCE.md) — Command cheat sheet
-- [deployment/README.md](deployment/README.md) — Script documentation
-- [deployment/VPS_VSCODE_SETUP.md](deployment/VPS_VSCODE_SETUP.md) — VS Code setup on VPS
 
 ### Project Docs
 - [README.md](README.md) — Project overview
@@ -259,11 +258,23 @@ Get-Content logs\trading.log -Tail 20 -Wait
 
 ## 🎯 Active Strategies
 
-### micro_strangle
-- **Status:** Active in testnet
-- **Module:** strategies/micro_strangle.py
-- **Description:** Micro strangle with configurable delta targets
-- **Risk Level:** Low (small qty)
+### blueprint_strangle
+- **Status:** Default template (active in main.py)
+- **Module:** strategies/blueprint_strangle.py
+- **Description:** Blueprint strangle — starting point for new strategies
+- **Risk Level:** Low (small qty, 0.01 BTC)
+
+### reverse_iron_condor_live
+- **Status:** Available (commented out in main.py)
+- **Module:** strategies/reverse_iron_condor_live.py
+- **Description:** Daily 1DTE reverse iron condor via RFQ
+- **Risk Level:** Medium (0.5 BTC per leg)
+
+### long_strangle_pnl_test
+- **Status:** Test/validation tool
+- **Module:** strategies/long_strangle_pnl_test.py
+- **Description:** 2-hour PnL monitoring test with profit/time exits
+- **Risk Level:** Low (0.01 BTC)
 
 ### rfq_endurance
 - **Status:** Test/validation tool

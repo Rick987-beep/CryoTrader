@@ -3,7 +3,7 @@
 A strategy-driven options trading system for the [Coincall](https://www.coincall.com/) exchange.  
 Strategies are declared as configuration — not coded as classes — and the framework handles entry checks, leg resolution, execution, lifecycle management, and exits automatically.
 
-**Current version:** 0.6.0 — Phase 1 & 2 Hardening (48-Hour Reliability)
+**Current version:** 0.7.0 — Configurable Execution Timing
 
 ## Highlights
 
@@ -15,7 +15,9 @@ Strategies are declared as configuration — not coded as classes — and the fr
 - **Trade lifecycle**: Full open → manage → close state machine with automatic exit evaluation ✅
 - **Exit conditions**: `profit_target()`, `max_loss()`, `max_hold_hours()`, `time_exit()`, `utc_datetime_exit()`, `account_delta_limit()`, `structure_delta_limit()`, `leg_greek_limit()` ✅
 - **Three execution modes**: Limit orders (with LimitFillManager), RFQ block trades ($50 k+), and smart orderbook (chunked quoting with aggressive fallback) ✅
-- **LimitFillManager**: Fill detection, 30 s requote timeout, aggressive repricing, up to 10 requote rounds ✅
+- **LimitFillManager**: Fill detection, configurable phased pricing (mark → mid → aggressive), requote management ✅
+- **ExecutionPhase**: Declarative pricing phases for limit orders — duration, buffer, reprice interval per phase ✅
+- **RFQParams**: Typed RFQ configuration (timeout, improvement threshold, fallback mode) ✅
 - **Position monitoring**: Background polling with live Greeks, PnL, account snapshots, and tick-driven strategy execution ✅
 - **Multi-leg native**: Strangles, Iron Condors, Butterflies — any structure as one lifecycle ✅
 - **HMAC-SHA256 authentication**: Secure API access via `auth.py` ✅
@@ -39,7 +41,7 @@ COINCALL_API_SECRET_PROD=your_secret
 ```
 
 ### 3. Define a strategy
-Create a factory function in `strategies/` (see `strategies/micro_strangle.py` for a working example):
+Create a factory function in `strategies/` (see `strategies/blueprint_strangle.py` for a working example):
 
 ```python
 # strategies/my_strategy.py
@@ -81,32 +83,43 @@ CoincallTrader/
 ├── main.py                         # Entry point — loads strategies, wires context, starts monitor
 ├── strategies/
 │   ├── __init__.py                 # Re-exports strategy factories
-│   ├── micro_strangle.py          # Micro strangle live test strategy
-│   └── rfq_endurance.py           # 3-cycle RFQ endurance test strategy
+│   ├── blueprint_strangle.py       # Blueprint strangle — starting template for new strategies
+│   ├── reverse_iron_condor_live.py # Reverse iron condor live trading strategy
+│   ├── long_strangle_pnl_test.py   # Long strangle PnL monitoring test
+│   └── rfq_endurance.py            # 3-cycle RFQ endurance test strategy
 ├── strategy.py                     # StrategyConfig, StrategyRunner, entry/exit condition factories
 ├── config.py                       # Environment & global config (.env loading)
 ├── auth.py                         # HMAC-SHA256 API authentication
+├── retry.py                        # @retry decorator with exponential backoff
 ├── market_data.py                  # Market data (option chains, orderbooks, BTC price)
 ├── option_selection.py             # LegSpec, resolve_legs(), select_option(), find_option()
-├── trade_execution.py              # TradeExecutor, LimitFillManager, ExecutionParams
-├── trade_lifecycle.py              # TradeState machine, TradeLeg, LifecycleManager, exit conditions
+├── trade_execution.py              # TradeExecutor, LimitFillManager, ExecutionParams, ExecutionPhase
+├── trade_lifecycle.py              # TradeState machine, TradeLeg, LifecycleManager, RFQParams
 ├── multileg_orderbook.py           # SmartOrderbookExecutor — chunked multi-leg execution
 ├── rfq.py                          # RFQExecutor — block-trade execution ($50k+ notional)
 ├── account_manager.py              # AccountManager, PositionMonitor, AccountSnapshot
+├── persistence.py                  # Trade state persistence (JSON snapshots for crash recovery)
+├── health_check.py                 # Background health check logging (5-min intervals)
+├── deployment/
+│   ├── health_check.ps1            # Windows service health monitoring
+│   └── monitor_dashboard.ps1       # Real-time status dashboard (PowerShell)
 ├── docs/
 │   ├── ARCHITECTURE_PLAN.md        # Roadmap, phases, requirements
 │   ├── API_REFERENCE.md            # Coincall exchange API endpoints & formats
 │   └── MODULE_REFERENCE.md         # Internal module docs (strategies, lifecycle, execution)
 ├── tests/
-│   ├── test_strategy_framework.py  # Unit tests — config, context, conditions
-│   ├── test_strategy_layer.py      # Strategy layer integration tests
-│   ├── test_complex_option_selection.py  # Compound option selection tests
+│   ├── test_strategy_framework.py  # Unit tests — config, context, conditions (72/72)
+│   ├── test_strategy_layer.py      # Strategy layer integration tests (50)
+│   ├── test_complex_option_selection.py  # Compound option selection tests (32/32)
+│   ├── test_execution_timing.py    # ExecutionPhase, RFQParams, phased execution (40/40)
 │   ├── test_rfq_comparison.py      # RFQ quote vs orderbook monitoring (strangle)
-│   └── test_rfq_iron_condor.py     # RFQ quote monitoring (iron condor)
+│   ├── test_rfq_iron_condor.py     # RFQ quote monitoring (iron condor)
+│   └── test_rfq_reverse_iron_condor.py  # RFQ reverse iron condor monitoring
 ├── logs/                           # Runtime logs (gitignored)
 ├── archive/                        # Legacy code (gitignored)
 ├── CHANGELOG.md
 ├── RELEASE_NOTES.md
+├── PROJECT_CONTEXT.md
 └── requirements.txt
 ```
 
@@ -162,15 +175,35 @@ CoincallTrader/
 | `cooldown_seconds` | `float` | Delay between new trades |
 | `check_interval_seconds` | `float` | Throttle between entry checks |
 | `on_trade_closed` | `Callable` | Optional callback when a trade closes |
-| `metadata` | `dict` | Arbitrary context (e.g. `ExecutionParams`) |
+| `execution_params` | `ExecutionParams` | Optional execution timing config (phased pricing, fill timeout) |
+| `rfq_params` | `RFQParams` | Optional RFQ config (timeout, improvement threshold, fallback) |
+| `metadata` | `dict` | Arbitrary context passed to lifecycle |
 
 ### ExecutionParams fields
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `fill_timeout_seconds` | `float` | `30.0` | Time before requoting |
+| `fill_timeout_seconds` | `float` | `30.0` | Time before requoting (legacy mode) |
 | `aggressive_buffer_pct` | `float` | `2.0` | How far past mid to price aggressively |
 | `max_requote_rounds` | `int` | `10` | Max requote attempts before failure |
+| `phases` | `list[ExecutionPhase]` | `None` | Optional phased pricing (overrides legacy mode) |
+
+### ExecutionPhase fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `pricing` | `str` | `"aggressive"` | Pricing mode: `"aggressive"`, `"mid"`, `"top_of_book"`, `"mark"` |
+| `duration_seconds` | `float` | `30.0` | How long to stay in this phase (min 10s) |
+| `buffer_pct` | `float` | `2.0` | Buffer % for aggressive pricing |
+| `reprice_interval` | `float` | `30.0` | Seconds between reprices (min 10s) |
+
+### RFQParams fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `timeout_seconds` | `float` | `60.0` | RFQ quote timeout |
+| `min_improvement_pct` | `float` | `-999.0` | Minimum improvement vs orderbook (-999 = accept anything) |
+| `fallback_mode` | `str` | `None` | Fallback if RFQ fails (e.g. `"limit"`) |
 
 ### LegSpec fields
 
@@ -253,9 +286,10 @@ python3 tests/test_complex_option_selection.py
 6. ✅ Strategy framework — declarative configs, entry/exit conditions, DI
 7. ✅ **Architecture cleanup** — modular strategies, clean layering, dead code removal
 8. ✅ **RFQ comparison fix** — correct orderbook side selection, unified improvement formula
-9. ⬜ Multi-instrument — futures, spot trading
-10. ⬜ Web dashboard — monitoring interface
-11. ⬜ Persistence & recovery — state persistence, crash recovery
+9. ✅ **48-hour reliability** — timeouts, retries, persistence, health checks
+10. ✅ **Configurable execution timing** — phased pricing, typed RFQ params
+11. ⬜ Multi-instrument — futures, spot trading
+12. ⬜ Web dashboard — monitoring interface
 
 ## Disclaimer
 

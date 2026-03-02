@@ -1,3 +1,157 @@
+# Release Notes — v0.7.0 "Configurable Execution Timing"
+
+**Release Date:** March 2, 2026  
+**Previous Version:** v0.6.0 (Phase 1 & 2 Hardening)
+
+---
+
+## Overview
+
+v0.7.0 adds **configurable execution timing** — the ability to define phased pricing strategies for limit orders and typed RFQ parameters. Instead of a single aggressive fill mode, you can now sequence pricing phases (e.g., "quote at mark for 5 minutes, then mid for 2 minutes, then aggressive") and configure RFQ timeouts and improvement thresholds as typed dataclasses rather than loose metadata keys.
+
+All changes are **fully backward compatible** — existing strategies and configurations work unchanged.
+
+---
+
+## Key Features
+
+### 1. ExecutionPhase — Phased Limit Order Pricing (`trade_execution.py`)
+
+New `ExecutionPhase` dataclass declares a pricing phase:
+
+```python
+from trade_execution import ExecutionPhase, ExecutionParams
+
+params = ExecutionParams(phases=[
+    ExecutionPhase(pricing="mark",       duration_seconds=300, reprice_interval=30),
+    ExecutionPhase(pricing="mid",        duration_seconds=120, reprice_interval=20),
+    ExecutionPhase(pricing="aggressive", duration_seconds=60,  buffer_pct=2.0),
+])
+```
+
+**Pricing modes:**
+| Mode | Description |
+|------|-------------|
+| `"mark"` | Quote at mark price — most patient, waits for fair value |
+| `"mid"` | Quote at (bid+ask)/2 — balanced approach |
+| `"top_of_book"` | Match best bid/ask — competitive but no edge |
+| `"aggressive"` | Cross the spread by buffer_pct — fastest fill |
+
+**Phase behavior:** Each phase runs for its `duration_seconds`, repricing every `reprice_interval`. When a phase expires, the next one starts automatically. After the last phase, the fill manager signals expiry.
+
+**Validation:** `duration_seconds` and `reprice_interval` are clamped to a 10-second minimum. Invalid pricing modes raise `ValueError`.
+
+### 2. RFQParams — Typed RFQ Configuration (`trade_lifecycle.py`)
+
+New `RFQParams` dataclass replaces loose metadata keys:
+
+```python
+from trade_lifecycle import RFQParams
+
+rfq_params = RFQParams(
+    timeout_seconds=300,        # Wait up to 5 minutes for quotes
+    min_improvement_pct=2.0,    # Require 2% improvement vs orderbook
+    fallback_mode="limit",      # Fall back to limit orders if RFQ fails
+)
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `timeout_seconds` | `float` | `60.0` | How long to wait for RFQ quotes |
+| `min_improvement_pct` | `float` | `-999.0` | Minimum improvement vs orderbook |
+| `fallback_mode` | `str\|None` | `None` | What to do if RFQ fails |
+
+### 3. Strategy-Level Wiring (`strategy.py`)
+
+Both `execution_params` and `rfq_params` are now first-class fields on `StrategyConfig`:
+
+```python
+from strategy import StrategyConfig
+from option_selection import strangle
+from trade_execution import ExecutionParams, ExecutionPhase
+from trade_lifecycle import RFQParams, profit_target, max_hold_hours
+
+config = StrategyConfig(
+    name="patient_strangle",
+    legs=strangle(qty=0.01, call_delta=0.15, put_delta=-0.15, dte="next", side=1),
+    execution_mode="limit",
+    execution_params=ExecutionParams(phases=[
+        ExecutionPhase(pricing="mark",       duration_seconds=300, reprice_interval=30),
+        ExecutionPhase(pricing="aggressive", duration_seconds=60,  buffer_pct=2.0),
+    ]),
+    rfq_params=RFQParams(timeout_seconds=120, min_improvement_pct=1.0),
+    exit_conditions=[profit_target(50), max_hold_hours(4)],
+    max_trades_per_day=1,
+)
+```
+
+These flow automatically through `StrategyRunner._open_trade()` → `LifecycleManager.create()` → `TradeLifecycle`.
+
+### 4. LimitFillManager Rewrite (`trade_execution.py`)
+
+The `LimitFillManager` was rewritten with a dual-mode architecture:
+- **Legacy mode** (`phases=None`): Original behavior — single aggressive mode with `fill_timeout_seconds` and `max_requote_rounds`. Default for all existing code.
+- **Phased mode** (`phases=[...]`): Walks through each `ExecutionPhase` in sequence with phase-aware pricing, per-phase reprice intervals, and automatic phase advancement.
+
+New internal methods: `_check_phased()`, `_check_legacy()`, `_get_phased_price()`, `_get_price_for_current_mode()`.
+
+---
+
+## Backward Compatibility
+
+All new fields default to `None`:
+- `ExecutionParams(phases=None)` → legacy LimitFillManager behavior
+- `StrategyConfig(execution_params=None, rfq_params=None)` → uses metadata dict as before
+- `TradeLifecycle(execution_params=None, rfq_params=None)` → reads from metadata fallback
+
+**No existing code needs to change.**
+
+---
+
+## Testing
+
+| Test Suite | Assertions | Status |
+|------------|-----------|--------|
+| `test_execution_timing.py` (NEW) | 40/40 | ✅ |
+| `test_strategy_framework.py` | 72/72 | ✅ |
+| `test_strategy_layer.py` | 49/50 | ✅ (1 pre-existing 0DTE failure) |
+
+The new test suite covers:
+- ExecutionPhase defaults, validation, duration/reprice clamping
+- ExecutionParams legacy vs phased modes
+- RFQParams defaults and custom values
+- TradeLifecycle new fields
+- StrategyConfig new fields
+- LimitFillManager initialization (legacy vs phased vs empty phases)
+
+---
+
+## File Changes
+
+| File | Change |
+|------|--------|
+| `trade_execution.py` | **Modified** — +200 lines: ExecutionPhase, phased LimitFillManager |
+| `trade_lifecycle.py` | **Modified** — +40 lines: RFQParams, typed param fields |
+| `strategy.py` | **Modified** — +8 lines: wiring execution_params/rfq_params |
+| `strategies/blueprint_strangle.py` | **Modified** — +20 lines: docs and examples |
+| `tests/test_execution_timing.py` | **NEW** — 159 lines, 40 assertions |
+
+**Total additions:** ~430 lines
+
+---
+
+## What's Next
+
+- **Multi-instrument support** — futures, spot trading
+- **Web dashboard** — monitoring interface
+- **Account alerts** — margin alerts, wallet holdings
+
+See [docs/ARCHITECTURE_PLAN.md](docs/ARCHITECTURE_PLAN.md) for the complete roadmap.
+
+---
+
+---
+
 # Release Notes — v0.6.0 "Phase 1 & 2 Hardening — 48-Hour Reliability"
 
 **Release Date:** February 24, 2026  

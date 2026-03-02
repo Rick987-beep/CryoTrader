@@ -1,8 +1,8 @@
 # CoincallTrader Architecture & Development Plan
 
-**Version:** 1.9  
-**Date:** February 24, 2026  
-**Status:** Phase 5 (Strategy Layer) + Phase 1–2 Hardening (48-Hour Reliability)
+**Version:** 2.0  
+**Date:** March 2, 2026  
+**Status:** Phase 5 (Strategy Layer) + Hardening + Configurable Execution Timing (v0.7.0)
 
 ---
 
@@ -20,19 +20,20 @@ This document outlines the transformation of CoincallTrader from a simple option
 - ✅ **Market data** — Option chains, orderbooks, BTC price, option details (`market_data.py`)
 - ✅ **Option selection** — Expiry/strike/delta filtering + `LegSpec` declarative resolution + compound `find_option()` with multi-constraint support + **DTE-based expiry** (`option_selection.py`)
 - ✅ **Structure templates** — `straddle()`, `strangle()` → return `List[LegSpec]` for plug-in to `StrategyConfig` (`option_selection.py`)
-- ✅ **Order execution** — Limit orders, get/cancel/status queries (`trade_execution.py`)
+- ✅ **Order execution** — Limit orders, get/cancel/status queries; **ExecutionPhase** for phased pricing (mark → mid → aggressive), **ExecutionParams** with optional phases list (`trade_execution.py`)
 - ✅ **RFQ execution** — Block trades for $50k+ notional multi-leg structures; **orderbook comparison fix** (correct side selection for buy/sell, unified improvement formula) (`rfq.py`)
 - ✅ **Smart orderbook execution** — Chunked quoting with aggressive fallback (`multileg_orderbook.py`)
-- ✅ **Trade lifecycle** — State machine (PENDING_OPEN → … → CLOSED), exit conditions, multi-leg native (`trade_lifecycle.py`)
+- ✅ **Trade lifecycle** — State machine (PENDING_OPEN → … → CLOSED), exit conditions, multi-leg native; **RFQParams** typed config (`trade_lifecycle.py`)
 - ✅ **Exit conditions** — `profit_target`, `max_loss`, `max_hold_hours`, **`time_exit`** (absolute clock), **`utc_datetime_exit`** (specific datetime), `account_delta_limit`, `structure_delta_limit`, `leg_greek_limit` (`trade_lifecycle.py`, `strategy.py`)
 - ✅ **Position monitoring** — Background polling, `AccountSnapshot`/`PositionSnapshot`, live Greeks (`account_manager.py`)
-- ✅ **Strategy framework** — `TradingContext` DI, `StrategyConfig`, `StrategyRunner`, 7 entry condition factories, dry-run mode (`strategy.py`)
+- ✅ **Strategy framework** — `TradingContext` DI, `StrategyConfig` (with `execution_params`, `rfq_params`), `StrategyRunner`, 7 entry condition factories, dry-run mode (`strategy.py`)
 - ✅ **Strategy lifecycle** — `max_trades_per_day` gate, `on_trade_closed` callback, `stats` property (`strategy.py`)
 - ✅ **Scheduling** — `time_window()`, `utc_time_window()`, `weekday_filter()` as entry conditions; `utc_datetime_exit()` for precise close scheduling
 - ✅ **Account info** — Equity, available margin, IM/MM amounts, margin utilisation, aggregated Greeks
 - ✅ **Logging** — File + console logging to `logs/trading.log` (audit trail)
 - ✅ **Phase 1 Hardening** — Request timeouts (30s), @retry decorator with exponential backoff (1-2-4s), main loop error isolation (max 10 consecutive errors before exit) (`auth.py`, `retry.py`, `main.py`)
 - ✅ **Phase 2 Reliability** — Market data caching with 30s TTL & max 100 entries (`market_data.py`), trade state persistence to `logs/trade_state.json` every 60s for crash recovery (`persistence.py`), background health check logging every 5 minutes (`health_check.py`), fixed `max_concurrent_trades=2` for daily rolling positions
+- ✅ **Configurable Execution Timing** — `ExecutionPhase` dataclass for phased limit pricing (aggressive/mid/top_of_book/mark with duration, buffer, reprice interval); `RFQParams` typed dataclass replacing loose metadata keys; wired through `StrategyConfig` and `TradeLifecycle` with full backward compatibility (`trade_execution.py`, `trade_lifecycle.py`, `strategy.py`)
 
 ### Not yet implemented
 - ⬜ Multi-instrument support (futures, spot)
@@ -79,8 +80,8 @@ CoincallTrader/
 ├── retry.py                # @retry decorator with exponential backoff
 ├── market_data.py          # Option chains, orderbooks, BTC price; TTLCache caching
 ├── option_selection.py     # LegSpec, resolve_legs(), select_option(), find_option(), straddle(), strangle()
-├── trade_execution.py      # Order placement, cancellation, status queries
-├── trade_lifecycle.py      # TradeState machine, TradeLeg, LifecycleManager, exit conditions (incl. time_exit)
+├── trade_execution.py      # Order placement, cancellation, status queries; ExecutionPhase, ExecutionParams
+├── trade_lifecycle.py      # TradeState machine, TradeLeg, LifecycleManager, RFQParams, exit conditions (incl. time_exit)
 ├── multileg_orderbook.py   # Smart chunked multi-leg execution
 ├── rfq.py                  # RFQ block-trade execution ($50k+ notional)
 ├── account_manager.py      # AccountSnapshot, PositionMonitor, margin/equity queries
@@ -100,11 +101,12 @@ CoincallTrader/
 │   └── MODULE_REFERENCE.md
 ├── tests/
 │   ├── test_strategy_framework.py   # 72/72 unit assertions
-│   ├── test_strategy_layer.py       # 51/51 strategy layer assertions
-│   ├── test_live_dry_run.py         # 27/27 integration assertions
+│   ├── test_strategy_layer.py       # 50 strategy layer assertions
 │   ├── test_complex_option_selection.py  # 32/32 compound selection assertions
+│   ├── test_execution_timing.py     # 40/40 ExecutionPhase, RFQParams, phased execution
 │   ├── test_rfq_comparison.py       # RFQ quote vs orderbook (strangle)
-│   └── test_rfq_iron_condor.py      # RFQ quote vs orderbook (iron condor)
+│   ├── test_rfq_iron_condor.py      # RFQ quote vs orderbook (iron condor)
+│   └── test_rfq_reverse_iron_condor.py  # RFQ reverse iron condor monitoring
 ├── logs/                   # Runtime logs (gitignored)
 └── archive/                # Legacy code (gitignored)
 ```
