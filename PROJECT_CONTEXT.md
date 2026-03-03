@@ -1,387 +1,265 @@
-# CoincallTrader — Project Context & Knowledge Base
+# CoincallTrader — Project Context for AI Agents
 
+**Version:** 0.8.0  
 **Last Updated:** 3 March 2026  
-**Maintainer:** Ulrik Deichsel
+**Python:** 3.9+ (no 3.10+ syntax — use `Optional[X]`, not `X | None`)
 
-This document captures important context, decisions, and setup information for continuity when working on different machines or with AI assistants.
+Automated BTC/ETH options trading bot for the Coincall exchange.
+Config-driven strategies, tick-based execution, zero-subclassing design.
 
----
-
-## 🎯 Project Overview
-
-**Purpose:** Automated options trading bot for Coincall exchange  
-**Language:** Python 3.9+  
-**Architecture:** Tick-driven with position monitoring loop  
-**Deployment Target:** Windows Server 2022 VPS (primary), also runs on macOS locally  
-**Current Version:** 0.8.0 — Web Dashboard
+For deeper detail, see:
+- [docs/MODULE_REFERENCE.md](docs/MODULE_REFERENCE.md) — every class, dataclass, and factory function
+- [docs/ARCHITECTURE_PLAN.md](docs/ARCHITECTURE_PLAN.md) — phased roadmap and requirements
+- [docs/API_REFERENCE.md](docs/API_REFERENCE.md) — Coincall REST API endpoints
 
 ---
 
-## 🏗️ Architecture
+## 1  Mental Model
 
-### Core Components
+```
+PositionMonitor (10 s poll, daemon thread)
+  │
+  ├─► LifecycleManager.tick(snapshot)   — advances every active trade's state machine
+  │
+  └─► StrategyRunner.tick(snapshot)     — per strategy:
+        1. check_closed_trades()        — fire on_trade_closed callback
+        2. entry gate (all conditions)  — time, weekday, margin, equity, delta
+        3. resolve_legs()               — LegSpec → concrete TradeLeg via option_selection
+        4. lifecycle_manager.create()   — creates TradeLifecycle with exit conditions
+        5. lifecycle_manager.open()     — routes to limit / rfq / smart executor
+```
 
-1. **main.py** — Entry point, wires everything together, runs position monitor loop
-2. **strategy.py** — Strategy framework, TradingContext DI, StrategyConfig, StrategyRunner
-3. **config.py** — Environment configuration (testnet/production switching)
-4. **auth.py** — API authentication and request signing (with timeouts & retries)
-5. **retry.py** — @retry decorator with exponential backoff
-6. **market_data.py** — Market data fetching and caching (30s TTL)
-7. **option_selection.py** — Option filtering, selection logic, LegSpec, find_option()
-8. **trade_execution.py** — Order placement, LimitFillManager (with phased pricing), ExecutionPhase, ExecutionParams
-9. **rfq.py** — Request-for-Quote handling ($50k+ notional)
-10. **trade_lifecycle.py** — Trade state machine, LifecycleManager, RFQParams, exit conditions
-11. **multileg_orderbook.py** — Smart chunked multi-leg execution
-12. **account_manager.py** — AccountSnapshot, PositionMonitor, margin/equity queries
-13. **persistence.py** — Trade state persistence (JSON snapshots for crash recovery)
-14. **health_check.py** — Background health check logging (5-min intervals)
-15. **telegram_notifier.py** — Telegram Bot API notifications (trade opens/closes, daily summary, errors)
-16. **dashboard.py** — Web dashboard (Flask + htmx), runs on daemon thread, password-protected
+Everything is driven by the PositionMonitor callback — no extra threads or event
+loops for strategy logic.
 
-### Strategy Modules
-- **strategies/blueprint_strangle.py** — Blueprint strangle strategy (starting template for new strategies)
-- **strategies/atm_straddle.py** — Daily ATM straddle with profit target + time exit
-- **strategies/reverse_iron_condor_live.py** — Reverse iron condor live trading strategy
-- **strategies/long_strangle_pnl_test.py** — Long strangle PnL monitoring test
+### Trade State Machine
+
+```
+PENDING_OPEN → OPENING → OPEN → PENDING_CLOSE → CLOSING → CLOSED
+                                                           └─► FAILED
+```
+
+Exit conditions are evaluated every tick while OPEN.  Any single exit returning
+True triggers PENDING_CLOSE.
 
 ---
 
-## 🔧 Configuration
+## 2  Key Abstractions
 
-### Environment Variables (.env)
+### TradingContext (DI container — `strategy.py`)
+```
+auth              CoincallAuth         — HMAC-signed requests
+market_data       MarketData           — option chains, orderbooks (30 s LRU cache)
+executor          TradeExecutor        — single-leg limit orders, LimitFillManager
+rfq_executor      RFQExecutor          — atomic multi-leg RFQ ($50k+ notional)
+smart_executor    SmartOrderbookExecutor — chunked multi-leg with repricing
+account_manager   AccountManager       — balance, positions, margin queries
+position_monitor  PositionMonitor      — background poller → callbacks
+lifecycle_manager LifecycleManager     — trade state machine
+persistence       TradeStatePersistence (optional) — crash recovery JSON
+notifier          TelegramNotifier     (optional) — fire-and-forget alerts
+```
+Created by `build_context()`.  For tests, replace any field with a mock.
+
+### StrategyConfig (dataclass — `strategy.py`)
+Declares *what*, *when*, *how*:
+- `legs: List[LegSpec]` — resolved to concrete symbols at trade time
+- `entry_conditions: List[EntryCondition]` — all must pass (AND)
+- `exit_conditions: List[ExitCondition]` — any triggers close (OR)
+- `execution_mode: "limit" | "rfq" | "smart" | "auto"`
+- `execution_params: ExecutionParams` — phased pricing for limit mode
+- `rfq_params: RFQParams` — timeout, improvement threshold, fallback
+- `max_concurrent_trades`, `max_trades_per_day`, `cooldown_seconds`
+- `on_trade_closed: Callable` — callback with (trade, snapshot)
+
+### AccountSnapshot / PositionSnapshot (frozen dataclasses — `account_manager.py`)
+Thread-safe, immutable snapshots.  `AccountSnapshot` carries: equity,
+available_margin, margin_utilization, net_delta/gamma/theta/vega,
+and a tuple of `PositionSnapshot` objects (each with symbol, qty, side,
+entry/mark price, UPnL, ROI, per-position Greeks).
+
+### Condition Factories
+**Entry** (`strategy.py`): `time_window`, `utc_time_window`, `weekday_filter`,
+`min_available_margin_pct`, `min_equity`, `max_account_delta`,
+`max_margin_utilization`, `no_existing_position_in`
+
+**Exit** (`strategy.py` + `trade_lifecycle.py`): `profit_target`, `max_loss`,
+`max_hold_hours`, `time_exit`, `utc_datetime_exit`, `account_delta_limit`,
+`structure_delta_limit`, `leg_greek_limit`
+
+### LegSpec → TradeLeg Resolution (`option_selection.py`)
+`LegSpec(option_type, side, qty, strike_criteria, expiry_criteria)` is resolved
+at trade time via `resolve_legs()`.  Strike criteria: `delta`, `closestStrike`,
+`spotdistance%`.  Expiry criteria: `{"symbol": "28MAR26"}`, `{"dte": 0}`,
+min/max range.  `find_option()` provides compound filtering + ranking.
+
+Structure templates: `straddle(qty, dte, side)`, `strangle(qty, call_delta, put_delta, dte, side)`.
+
+---
+
+## 3  Execution Pipeline
+
+Three modes, routable via `execution_mode` or auto-selected by notional size:
+
+| Mode | Module | When | How |
+|------|--------|------|-----|
+| `limit` | `trade_execution.py` | Default / small trades | Per-leg limit orders via `LimitFillManager`. Supports phased pricing: `ExecutionPhase(pricing, duration, buffer_pct, reprice_interval)` — walks through mark → mid → aggressive. |
+| `rfq` | `rfq.py` | $50k+ notional | Atomic multi-leg RFQ. Best-quote selection with orderbook comparison. `RFQParams` configures timeout, min improvement, fallback mode. |
+| `smart` | `multileg_orderbook.py` | $10k–$50k or multi-leg | Chunked execution with continuous quoting. `SmartExecConfig` configures chunks, time per chunk, pricing strategy, repricing. |
+| `auto` | `trade_lifecycle.py` | Default mode | Routes by notional: smart ≥ $10k, rfq ≥ $50k, else limit. |
+
+---
+
+## 4  Threading Model
+
+All daemon threads — if the main process dies, everything dies.
+
+| Thread | Source | Interval |
+|--------|--------|----------|
+| Main | `main.py` — sleep loop, persistence saves, auto-shutdown detection | 10 s |
+| PositionMonitor | `account_manager.py` — polls positions → fires callbacks | 10 s |
+| HealthChecker | `health_check.py` — logs status, triggers Telegram daily summary | 5 min |
+| Dashboard | `dashboard.py` — Flask + htmx web server | continuous |
+
+---
+
+## 5  Module Map
+
+### Core
+| File | Purpose |
+|------|---------|
+| `main.py` | Entry point. Wires context, registers strategies, starts services, runs main loop. |
+| `strategy.py` | `TradingContext`, `build_context()`, `StrategyConfig`, `StrategyRunner`, entry/exit condition factories. |
+| `config.py` | `TRADING_ENVIRONMENT`, `API_KEY`, `API_SECRET`, `BASE_URL`. Reads `.env` via dotenv. |
+| `auth.py` | `CoincallAuth` — HMAC-SHA256 signing, 30 s request timeout. |
+| `retry.py` | `@retry` decorator — exponential backoff (1 → 2 → 4 s), only for ConnectionError/Timeout. |
+
+### Market Data & Selection
+| File | Purpose |
+|------|---------|
+| `market_data.py` | `MarketData` — option chains, orderbooks, Greeks. 30 s LRU cache (100 entries). |
+| `option_selection.py` | `LegSpec`, `resolve_legs()`, `find_option()`, `straddle()`, `strangle()`. |
+
+### Execution
+| File | Purpose |
+|------|---------|
+| `trade_execution.py` | `TradeExecutor`, `LimitFillManager`, `ExecutionParams`, `ExecutionPhase`. |
+| `rfq.py` | `RFQExecutor`, `OptionLeg`, `RFQResult`. Best-quote logic, orderbook comparison. |
+| `multileg_orderbook.py` | `SmartOrderbookExecutor`, `SmartExecConfig`. Chunked multi-leg with quoting + aggressive fallback. |
+| `trade_lifecycle.py` | `TradeState`, `TradeLeg`, `TradeLifecycle`, `LifecycleManager`, `RFQParams`. State machine, PnL tracking, position scaling. |
+
+### Account & Monitoring
+| File | Purpose |
+|------|---------|
+| `account_manager.py` | `AccountManager`, `AccountSnapshot`, `PositionSnapshot`, `PositionMonitor`. |
+| `persistence.py` | `TradeStatePersistence` — `trade_state.json` (active), `trade_history.jsonl` (completed). |
+| `health_check.py` | `HealthChecker` — logs every 5 min, escalates on high margin/low equity, triggers daily Telegram summary. |
+
+### Notifications & UI
+| File | Purpose |
+|------|---------|
+| `telegram_notifier.py` | `TelegramNotifier` — startup/shutdown, trade open/close, daily summary, errors. Fire-and-forget, rate-limited. |
+| `dashboard.py` | Flask + htmx web dashboard. Session auth, daemon thread. Routes: account, strategies, positions, logs, pause/resume/stop, kill switch. |
+| `templates/` | 6 HTML files: `dashboard.html`, `login.html`, `_account.html`, `_strategies.html`, `_positions.html`, `_logs.html`. |
+
+### Strategies
+| File | Purpose |
+|------|---------|
+| `strategies/__init__.py` | Imports all strategy factory functions. |
+| `strategies/blueprint_strangle.py` | Template strangle — starting point for new strategies. Active in `main.py`. |
+| `strategies/atm_straddle.py` | Daily ATM straddle with profit target + time exit. |
+| `strategies/reverse_iron_condor_live.py` | Daily 1DTE reverse iron condor via RFQ. |
+| `strategies/long_strangle_pnl_test.py` | PnL monitoring test (2 h hold). |
+
+---
+
+## 6  How to Write a New Strategy
+
+A strategy is a **function** that returns a `StrategyConfig`.  No subclassing.
+
+```python
+# strategies/my_strategy.py
+from strategy import StrategyConfig, time_window, min_available_margin_pct
+from option_selection import strangle
+from trade_lifecycle import profit_target, max_hold_hours
+
+def my_strategy() -> StrategyConfig:
+    return StrategyConfig(
+        name="my_strategy",
+        legs=strangle(qty=0.01, call_delta=0.25, put_delta=-0.25, dte=1, side=2),
+        entry_conditions=[time_window(8, 20), min_available_margin_pct(50)],
+        exit_conditions=[profit_target(50), max_hold_hours(24)],
+        max_concurrent_trades=1,
+    )
+```
+
+Then register in `strategies/__init__.py` and add to `STRATEGIES` list in `main.py`.
+
+---
+
+## 7  Environment & Config
 
 ```bash
-TRADING_ENVIRONMENT=testnet  # or 'production'
+# .env
+TRADING_ENVIRONMENT=testnet          # or 'production'
 COINCALL_API_KEY_TEST=...
 COINCALL_API_SECRET_TEST=...
 COINCALL_API_KEY_PROD=...
 COINCALL_API_SECRET_PROD=...
-
-# Telegram notifications (optional — leave blank to disable)
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_CHAT_ID=...
-
-# Web dashboard (optional — leave blank to disable)
-DASHBOARD_PASSWORD=...           # required to enable dashboard
-DASHBOARD_PORT=8080              # optional, default 8080
+TELEGRAM_BOT_TOKEN=...              # optional — blank disables
+TELEGRAM_CHAT_ID=...                # optional
+DASHBOARD_PASSWORD=...              # optional — blank disables dashboard
+DASHBOARD_PORT=8080                 # optional, default 8080
 ```
 
-### Key Config Details
-- Environment switching via `TRADING_ENVIRONMENT` in .env
-- Testnet: https://betaapi.coincall.com
-- Production: https://api.coincall.com
-- See config.py for full configuration structure
+- Testnet: `https://betaapi.coincall.com`
+- Production: `https://api.coincall.com`
+- `config.py` reads `.env` via `python-dotenv` and exposes `API_KEY`, `API_SECRET`, `BASE_URL`, `ENVIRONMENT`.
 
 ---
 
-## 💻 Development Environment
+## 8  Resilience
 
-### Local (macOS)
-- Python 3.9+ in virtual environment (.venv)
-- Dependencies: requests, python-dotenv, websockets, flask (see requirements.txt)
-- Development and testing happens here
-- VS Code with GitHub Copilot
+All hardening is built-in — no configuration needed:
 
-### Production (Windows Server 2022 VPS)
-- Same Python version and dependencies
-- Runs as Windows Service via NSSM
-- Auto-restart on failure
-- Scheduled health checks and log rotation
-- VS Code with GitHub Copilot for deployment/debugging
+- **Request timeouts**: 30 s on every API call (`auth.py`)
+- **@retry**: Exponential backoff for ConnectionError/Timeout only (`retry.py`)
+- **Error isolation**: Main loop tolerates up to 10 consecutive errors, then exits and notifies via Telegram (`main.py`)
+- **Market data cache**: 30 s TTL, 100-entry LRU (`market_data.py`)
+- **Trade persistence**: Active trades saved to JSON every 60 s; completed trades appended to JSONL (`persistence.py`)
+- **Crash recovery**: PositionMonitor detects live positions on restart; `max_trades_per_day` prevents duplicates
 
 ---
 
-## 🚀 Deployment
+## 9  Deployment
 
-### Deployment Method: Windows Service (NSSM)
-- **Location:** C:\CoincallTrader
-- **Service Name:** CoincallTrader
-- **Auto-start:** Yes
-- **Restart Policy:** Auto-restart on failure with 5-second delay
-
-### Deployment Scripts (deployment/)
-1. **health_check.ps1** — Service health monitoring (runs every 15 min)
-2. **monitor_dashboard.ps1** — Real-time status dashboard
-
-### Deployment Workflow
-1. Develop locally on Mac
-2. Test in testnet mode
-3. Commit and push to Git
-4. RDP to VPS → Open VS Code
-5. Pull latest code
-6. Restart service if needed
-7. Monitor via dashboard
+- **Dev**: macOS, `.venv`, testnet
+- **Prod**: Windows Server 2022 VPS, NSSM service (`CoincallTrader`), auto-restart
+- **Workflow**: develop locally → testnet → commit → push → pull on VPS → restart service
+- **Deployment docs**: [deployment/WINDOWS_DEPLOYMENT.md](deployment/WINDOWS_DEPLOYMENT.md)
 
 ---
 
-## �️ 48-Hour Reliability Features (Phase 1 & 2 Hardening)
+## 10  Coding Conventions
 
-### Phase 1: Core Resilience
-- **Request Timeouts**: All API calls wrapped with 30-second timeout (`auth.py`)
-- **Retry Logic**: @retry decorator with exponential backoff (1s → 2s → 4s) for transient errors only (ConnectionError, Timeout), NOT HTTP errors (`retry.py`)
-- **Error Isolation**: Main loop catches per-iteration exceptions, allows up to 10 consecutive errors before exit, auto-recovery between iterations (`main.py`)
-
-**Result:** Handles brief network glitches, API overload, temporary stalls without crashing
-
-### Phase 2: Operational Visibility & Recovery
-- **Market Data Caching**: 30-second TTL with 100-entry LRU cache on option chains and details (`market_data.py`). Reduces API load ~70% on burst queries, provides fallback if API stalls
-- **Trade State Persistence**: Auto-save active trades to `logs/trade_state.json` every 60 seconds. Enables recovery if app crashes mid-position (`persistence.py`)
-- **Health Check Logging**: Background thread logs account equity, margin, positions, and portfolio delta every 5 minutes to `logs/health.log` (`health_check.py`)
-- **Crash Recovery**: If app crashes and restarts (even hours later), PositionMonitor immediately detects all live positions via API. `max_trades_per_day=1` prevents duplicate entries next day
-
-**Result:** 48-hour autonomous operation with operational visibility; safe recovery if crash detected
-
-### Configuration
-All hardening is built-in and automatic — no configuration needed. See `main.py` for startup flow (persistence, health_checker initialization and start).
+- **Dataclasses everywhere** — `StrategyConfig`, `AccountSnapshot`, `PositionSnapshot`, `RFQParams`, `ExecutionParams`, `ExecutionPhase`, `TradeLeg`, `SmartExecConfig` are all `@dataclass`
+- **Frozen dataclasses** for thread-safe snapshots (`AccountSnapshot`, `PositionSnapshot`)
+- **Factory functions** for conditions — return callables, not classes
+- **Optional services** use `Optional[X] = None` on `TradingContext` (persistence, notifier)
+- **Fire-and-forget** for Telegram — every send wrapped in try/except, never crashes the bot
+- **Logging** via `logging.getLogger(__name__)` in every module
+- **No global mutable state** — everything flows through `TradingContext`
 
 ---
 
-## 📊 Monitoring & Operations
+## 11  Documentation Index
 
-
-### Logs
-- **Application:** C:\CoincallTrader\logs\trading.log
-- **Trade State:** C:\CoincallTrader\logs\trade_state.json (updated every 60s, persistence snapshots)
-- **Health Check:** C:\CoincallTrader\logs\health.log (updated every 5 min, account equity/margin/positions/delta)
-- **Service Output:** C:\CoincallTrader\logs\service_output.log
-- **Service Errors:** C:\CoincallTrader\logs\service_error.log
-
-### Health Checks
-- Service status (must be "Running")
-- Log freshness (<30 min since last write)
-- Memory usage (<1GB)
-- Disk space (>5GB free)
-- No critical errors in recent logs
-
-### Common Commands (VPS)
-```powershell
-# Service control
-Start-Service CoincallTrader
-Stop-Service CoincallTrader
-Restart-Service CoincallTrader
-Get-Service CoincallTrader
-
-# View logs
-Get-Content logs\trading.log -Tail 20 -Wait
-
-# Monitor dashboard
-.\deployment\monitor_dashboard.ps1
-
-# Health check
-.\deployment\health_check.ps1
-```
-
----
-
-## 🔐 Security
-
-### Best Practices
-- Never commit .env to Git
-- Restrict RDP access to specific IPs
-- Use strong passwords
-- Keep Windows updated
-- Run service as non-admin user (optional but recommended)
-- File permissions: .env should only be readable by service user
-
-### Firewall
-- Only RDP (3389) inbound allowed
-- All other ports blocked by default
-
----
-
-## 📝 Important Decisions & Rationale
-
-### Why Windows Server?
-- User has access to powerful Windows VPS
-- NSSM makes service management simple
-- PowerShell scripts for automation
-- RDP provides easy access
-
-### Why NSSM over Native Windows Service?
-- Much simpler to configure
-- Better restart policies
-- Easy logging configuration
-- No need to write service wrapper code
-
-### Why Position Monitor Loop?
-- Simpler than WebSocket for MVP
-- More reliable for long-running operation
-- Easy to debug and monitor
-- WebSockets can be added later if needed
-
-### Why Testnet/Production Switch?
-- Safe testing without risk
-- Easy to switch environments
-- Same code runs in both
-- Prevents accidental production trades during development
-
----
-
-## 🐛 Known Issues & Gotchas
-
-### PowerShell Execution Policy
-- May need: `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
-- Scripts include bypass flags where appropriate
-
-### Virtual Environment Activation
-- Windows: `.\.venv\Scripts\Activate.ps1`
-- macOS/Linux: `source .venv/bin/activate`
-
-### Log File Locking
-- Service must be stopped to rotate logs
-- rotate_logs.ps1 handles this automatically
-
-### Time Zones
-- Important for options expiry calculations
-- VPS should be set to appropriate timezone
-
----
-
-## 📚 Documentation Index
-
-### Deployment Docs
-- [WINDOWS_DEPLOYMENT.md](deployment/WINDOWS_DEPLOYMENT.md) — Full deployment guide
-
-### Project Docs
-- [README.md](README.md) — Project overview
-- [CHANGELOG.md](CHANGELOG.md) — Version history
-- [RELEASE_NOTES.md](RELEASE_NOTES.md) — Release notes
-- [docs/API_REFERENCE.md](docs/API_REFERENCE.md) — Coincall exchange API reference
-- [docs/MODULE_REFERENCE.md](docs/MODULE_REFERENCE.md) — Internal module reference
-- [docs/ARCHITECTURE_PLAN.md](docs/ARCHITECTURE_PLAN.md) — Architecture documentation
-
----
-
-## 🔄 Development Workflow
-
-1. **Plan** — Define strategy or feature
-2. **Develop** — Write code on Mac locally
-3. **Test** — Run in testnet mode (`TRADING_ENVIRONMENT=testnet`)
-4. **Review** — Check logs, verify behavior
-5. **Commit** — Git commit with descriptive message
-6. **Push** — Push to GitHub
-7. **Deploy** — Pull on VPS, restart service
-8. **Monitor** — Watch logs and dashboard for first hour
-9. **Verify** — Check after 24h, 3d, 7d for stability
-
----
-
-## 🎯 Active Strategies
-
-### blueprint_strangle
-- **Status:** Default template (active in main.py)
-- **Module:** strategies/blueprint_strangle.py
-- **Description:** Blueprint strangle — starting point for new strategies
-- **Risk Level:** Low (small qty, 0.01 BTC)
-
-### reverse_iron_condor_live
-- **Status:** Available (commented out in main.py)
-- **Module:** strategies/reverse_iron_condor_live.py
-- **Description:** Daily 1DTE reverse iron condor via RFQ
-- **Risk Level:** Medium (0.5 BTC per leg)
-
-### long_strangle_pnl_test
-- **Status:** Test/validation tool
-- **Module:** strategies/long_strangle_pnl_test.py
-- **Description:** 2-hour PnL monitoring test with profit/time exits
-- **Risk Level:** Low (0.01 BTC)
-
-### rfq_endurance
-- **Status:** Test/validation tool
-- **Module:** strategies/rfq_endurance.py
-- **Description:** 3-cycle scheduled RFQ strangle test with UTC time windows
-- **Risk Level:** Low (0.5 qty, short hold times)
-
----
-
-## 💡 Tips for AI Assistants (GitHub Copilot)
-
-When working on this project:
-
-1. **Check TRADING_ENVIRONMENT** — Ask user if testnet or production
-2. **Always use virtual environment** — Activate .venv first
-3. **Follow logging patterns** — Use existing logger instances
-4. **Security first** — Never log API credentials
-5. **Windows paths** — Remember backslash escaping on Windows
-6. **Service impact** — Mention if changes require service restart
-7. **Testing required** — Always test in testnet first
-
-### Quick Context Commands
-```powershell
-# Show current environment
-Get-Content .env | Select-String "TRADING_ENVIRONMENT"
-
-# Check if service is running
-Get-Service CoincallTrader
-
-# See recent activity
-Get-Content logs\trading.log -Tail 30
-```
-
----
-
-## 🆘 Emergency Procedures
-
-### Service Won't Start
-1. Check service status: `nssm status CoincallTrader`
-2. View error log: `Get-Content logs\service_error.log`
-3. Test manually: Stop service → activate venv → `python main.py`
-4. Check for: missing dependencies, .env misconfiguration, API credential issues
-
-### High Memory Usage
-1. Check process: `Get-Process python`
-2. Review logs for errors or exceptions
-3. Restart service: `Restart-Service CoincallTrader`
-4. If persistent: investigate memory leak
-
-### Disk Full
-1. Check space: `Get-PSDrive C`
-2. Run log rotation: `.\deployment\rotate_logs.ps1`
-3. Clean old archives: `Remove-Item logs\archive\* -Force`
-
-### Lost Connectivity to Exchange
-1. Check internet: `Test-NetConnection api.coincall.com -Port 443`
-2. Review recent logs for API errors
-3. Verify API credentials in .env
-4. Restart service: `Restart-Service CoincallTrader`
-
----
-
-## 📞 Contacts & Resources
-
-### Exchange
-- **Coincall Testnet:** https://beta.coincall.com/
-- **Coincall Production:** https://www.coincall.com/
-- **API Docs:** [Link to API documentation]
-- **Support:** support@coincall.com
-
-### Infrastructure
-- **VPS Provider:** [Add provider name and support link]
-- **Repository:** [Add GitHub repo link if applicable]
-
----
-
-## 🔖 Quick References
-
-### File Paths (VPS)
-```
-C:\CoincallTrader\          — Application root
-C:\CoincallTrader\.env      — Credentials (SECRET!)
-C:\CoincallTrader\logs\     — All logs
-C:\CoincallTrader\deployment\  — Deployment scripts
-```
-
-### Key Environment Variables
-- `TRADING_ENVIRONMENT` — testnet or production
-- `COINCALL_API_KEY_TEST` — Testnet API key
-- `COINCALL_API_SECRET_TEST` — Testnet API secret
-- `COINCALL_API_KEY_PROD` — Production API key (CAREFUL!)
-- `COINCALL_API_SECRET_PROD` — Production API secret (CAREFUL!)
-
----
-
-**Note:** Keep this document updated as the project evolves. When switching machines or AI assistant contexts, read this file first for quick ramp-up.
-
----
-
-**End of Context Document**
+| Document | Audience | Content |
+|----------|----------|---------|
+| [README.md](README.md) | Humans | Overview, quickstart, structure |
+| [CHANGELOG.md](CHANGELOG.md) | Humans | Version-by-version changes |
+| [RELEASE_NOTES.md](RELEASE_NOTES.md) | Humans | Latest release highlights |
+| [docs/MODULE_REFERENCE.md](docs/MODULE_REFERENCE.md) | AI + Humans | Every class, method, dataclass, factory function with signatures and tables |
+| [docs/ARCHITECTURE_PLAN.md](docs/ARCHITECTURE_PLAN.md) | AI + Humans | Phased roadmap, requirements, design decisions |
+| [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | AI + Humans | Coincall exchange REST API endpoints and fields |
+| [deployment/WINDOWS_DEPLOYMENT.md](deployment/WINDOWS_DEPLOYMENT.md) | Ops | VPS setup, NSSM, PowerShell scripts |
