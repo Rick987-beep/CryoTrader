@@ -1,6 +1,6 @@
 # CoincallTrader — Module Reference
 
-**Last Updated:** March 2, 2026
+**Last Updated:** March 3, 2026
 
 Internal documentation for the CoincallTrader application modules.
 For Coincall exchange API endpoints, see [API_REFERENCE.md](API_REFERENCE.md).
@@ -83,7 +83,7 @@ ctx.position_monitor.start()
 ### Key Classes
 | Class | Purpose |
 |-------|---------|
-| `TradingContext` | DI container: auth, market_data, executor, rfq_executor, smart_executor, account_manager, position_monitor, lifecycle_manager |
+| `TradingContext` | DI container: auth, market_data, executor, rfq_executor, smart_executor, account_manager, position_monitor, lifecycle_manager, persistence (optional), notifier (optional) |
 | `StrategyConfig` | Declarative definition: name, legs, entry/exit conditions, execution_mode, max_concurrent, max_trades_per_day, cooldown, execution_params, rfq_params, on_trade_closed |
 | `StrategyRunner` | Tick-driven executor: checks entries, resolves legs, creates trades, delegates to LifecycleManager. Exposes `stats` property. |
 
@@ -595,3 +595,150 @@ Tested with 3-leg butterfly (0.2/0.4/0.2 contracts):
 - **Opening**: 57.1s, 100% fills, 2 chunks
 - **Closing**: 65.4s, 100% fills, complete position closure
 - **Slippage**: Minimal due to mid-price quoting
+
+---
+
+## Telegram Notifications
+
+See [telegram_notifier.py](../telegram_notifier.py) for the implementation.
+
+### Overview
+
+Fire-and-forget Telegram alerts via the Bot API.  If `TELEGRAM_BOT_TOKEN` is not set, the notifier silently no-ops — zero impact on the trading bot.
+
+### Setup
+1. Message `@BotFather` on Telegram → `/newbot` → copy the bot token
+2. Send any message to your new bot, then visit
+   `https://api.telegram.org/bot<TOKEN>/getUpdates` to find your `chat_id`
+3. Add to `.env`:
+   ```
+   TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
+   TELEGRAM_CHAT_ID=123456789
+   ```
+
+### Key Class
+| Class | Purpose |
+|-------|----------|
+| `TelegramNotifier` | Thread-safe sender. All `send()` calls are rate-limited (1 msg/s) and wrapped in try/except — a Telegram failure never crashes the bot. |
+
+### Notification Helpers
+| Method | When it fires |
+|--------|---------------|
+| `notify_startup(environment)` | System boot |
+| `notify_shutdown()` | Graceful shutdown |
+| `notify_trade_opened(strategy, trade_id, legs, cost)` | Trade enters OPEN state |
+| `notify_trade_closed(strategy, trade_id, pnl, roi, hold_min, cost)` | Trade enters CLOSED state |
+| `notify_daily_summary(equity, upnl, margin%, delta, positions)` | Once per ~23 h (throttled internally) |
+| `notify_error(message)` | Consecutive failures in main loop |
+
+### Integration
+- Created by `build_context()` in `strategy.py` and stored as `ctx.notifier`.
+- Called by `LifecycleManager` on trade open/close and by `HealthChecker` for the daily summary.
+- Dashboard kill switch also sends a Telegram alert.
+
+---
+
+## Web Dashboard
+
+See [dashboard.py](../dashboard.py) and [templates/](../templates/) for the implementation.
+
+### Overview
+
+Lightweight Flask + htmx dashboard that runs on a daemon thread inside the existing process.  It reads `TradingContext` and `StrategyRunner` state directly — no IPC or database needed.
+
+### Setup
+```
+DASHBOARD_PASSWORD=your_secret   # required — dashboard disabled without it
+DASHBOARD_PORT=8080              # optional, default 8080
+```
+
+### Wiring (automatic via main.py)
+```python
+from dashboard import start_dashboard
+start_dashboard(ctx, runners, host="0.0.0.0", port=8080)
+```
+
+### Key Classes
+| Class | Purpose |
+|-------|----------|
+| `DashboardLogHandler` | `logging.Handler` with a ring buffer (`deque`, maxlen 200). Attached to root logger on startup. |
+| `_create_app()` | Flask app factory — builds all routes and returns the `Flask` instance. |
+| `start_dashboard()` | Entry point: reads `DASHBOARD_PASSWORD`, attaches the log handler, spawns daemon thread running Flask. |
+
+### Routes
+| Route | Method | Auth | Description |
+|-------|--------|------|-------------|
+| `/login` | GET/POST | — | Session-based password login |
+| `/logout` | GET | — | Clears session, redirects to login |
+| `/` | GET | ✓ | Main dashboard page |
+| `/api/account` | GET | ✓ | htmx fragment: equity, margin, Greeks |
+| `/api/strategies` | GET | ✓ | htmx fragment: strategy cards with stats |
+| `/api/positions` | GET | ✓ | htmx fragment: open positions table |
+| `/api/logs` | GET | ✓ | htmx fragment: live log tail |
+| `/api/strategy/<name>/pause` | POST | ✓ | Pause (disable ticks) for a strategy |
+| `/api/strategy/<name>/resume` | POST | ✓ | Resume a paused strategy |
+| `/api/strategy/<name>/stop` | POST | ✓ | Permanently stop a strategy |
+| `/api/killswitch` | POST | ✓ | Force-close **all** active trades across all strategies |
+
+### Design Decisions
+- **htmx polling** — each panel re-fetches its own fragment every 3–5 s; no WebSocket needed.
+- **Session auth** — password stored in env, compared on login, stored in Flask session cookie.
+- **Daemon thread** — if the main process dies, the dashboard dies with it. No orphan servers.
+- **Read-only by default** — the dashboard reads existing objects. Only the control endpoints (pause/resume/stop/kill) mutate state.
+
+---
+
+## Health Check
+
+See [health_check.py](../health_check.py) for the implementation.
+
+### Overview
+
+Background thread that logs system health every 5 minutes. Provides visibility into API connectivity, account equity/margin, and uptime. Integrates with TelegramNotifier for daily account summaries.
+
+### Key Class
+| Class | Purpose |
+|-------|----------|
+| `HealthChecker` | Daemon thread: polls `account_snapshot_fn()` on interval, logs at DEBUG (normal) or WARNING (high margin / low equity). Triggers `notifier.notify_daily_summary()` once per ~23 h. |
+
+### Key Methods
+| Method | Purpose |
+|--------|----------|
+| `start()` | Launch background health-check thread |
+| `stop()` | Stop thread (join with timeout) |
+| `set_account_snapshot_fn(fn)` | Set the callable that returns an `AccountSnapshot` |
+
+### Escalation Rules
+- **Normal**: logged at `DEBUG` (suppressed unless log level lowered)
+- **Margin utilization > 80%**: escalated to `WARNING`
+- **Equity < $100**: escalated to `WARNING`
+
+---
+
+## Trade State Persistence
+
+See [persistence.py](../persistence.py) for the implementation.
+
+### Overview
+
+Saves and recovers active trade state to/from JSON. Provides crash recovery and operational visibility.
+
+### Key Class
+| Class | Purpose |
+|-------|----------|
+| `TradeStatePersistence` | Writes `logs/trade_state.json` on every tick (throttled to 60 s). Appends completed trades to `logs/trade_history.jsonl`. |
+
+### Key Methods
+| Method | Purpose |
+|--------|----------|
+| `save_trades(trades)` | Snapshot active trades to `trade_state.json` (throttled) |
+| `load_trades()` | Load last saved state for crash recovery |
+| `clear()` | Remove the state file |
+| `save_completed_trade(trade)` | Append a finished trade to `trade_history.jsonl` |
+| `load_trade_history()` | Read all completed trade records |
+
+### Files
+| File | Format | Purpose |
+|------|--------|---------|
+| `logs/trade_state.json` | JSON | Current active-trade snapshot (overwritten each save) |
+| `logs/trade_history.jsonl` | JSON Lines | Append-only log of completed trades |

@@ -1,7 +1,7 @@
 # Coincall Exchange API Reference
 
 **Official Documentation:** https://docs.coincall.com/  
-**Last Updated:** February 24, 2026
+**Last Updated:** March 3, 2026
 
 Reference for the Coincall exchange REST and WebSocket APIs.
 For CoincallTrader internal module documentation, see [MODULE_REFERENCE.md](MODULE_REFERENCE.md).

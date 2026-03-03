@@ -1,8 +1,8 @@
 # CoincallTrader Architecture & Development Plan
 
-**Version:** 2.0  
-**Date:** March 2, 2026  
-**Status:** Phase 5 (Strategy Layer) + Hardening + Configurable Execution Timing (v0.7.0)
+**Version:** 3.0  
+**Date:** March 3, 2026  
+**Status:** v0.8.0 — Web Dashboard (Phase 7 complete)
 
 ---
 
@@ -34,10 +34,11 @@ This document outlines the transformation of CoincallTrader from a simple option
 - ✅ **Phase 1 Hardening** — Request timeouts (30s), @retry decorator with exponential backoff (1-2-4s), main loop error isolation (max 10 consecutive errors before exit) (`auth.py`, `retry.py`, `main.py`)
 - ✅ **Phase 2 Reliability** — Market data caching with 30s TTL & max 100 entries (`market_data.py`), trade state persistence to `logs/trade_state.json` every 60s for crash recovery (`persistence.py`), background health check logging every 5 minutes (`health_check.py`), fixed `max_concurrent_trades=2` for daily rolling positions
 - ✅ **Configurable Execution Timing** — `ExecutionPhase` dataclass for phased limit pricing (aggressive/mid/top_of_book/mark with duration, buffer, reprice interval); `RFQParams` typed dataclass replacing loose metadata keys; wired through `StrategyConfig` and `TradeLifecycle` with full backward compatibility (`trade_execution.py`, `trade_lifecycle.py`, `strategy.py`)
+- ✅ **Telegram Notifications** — Fire-and-forget alerts via Bot API: trade opens/closes (PnL, ROI), daily account summary, startup/shutdown, critical errors. Wired at framework level — all strategies get notifications automatically (`telegram_notifier.py`)
+- ✅ **Web Dashboard** — Real-time browser UI (Flask + htmx) running as daemon thread. Account summary, strategy cards with Pause/Resume/Stop controls, positions table, live log tail, kill switch. Password-protected via `DASHBOARD_PASSWORD` env var (`dashboard.py`, `templates/`)
 
 ### Not yet implemented
 - ⬜ Multi-instrument support (futures, spot)
-- ⬜ Web dashboard for monitoring
 - ⬜ Margin alerts (email/webhook)
 - ⬜ Historical P&L tracking
 - ⬜ Expiry-aware rolling
@@ -87,14 +88,23 @@ CoincallTrader/
 ├── account_manager.py      # AccountSnapshot, PositionMonitor, margin/equity queries
 ├── persistence.py          # TradeStatePersistence: JSON snapshots for crash recovery
 ├── health_check.py         # HealthChecker: background health logging every 5 minutes
+├── telegram_notifier.py    # Telegram Bot API notifications (fire-and-forget)
+├── dashboard.py            # Web dashboard (Flask + htmx, daemon thread)
+├── templates/              # Dashboard HTML templates (Jinja2 + htmx)
+│   ├── dashboard.html      # Main page with auto-polling panels
+│   ├── login.html          # Password login
+│   ├── _account.html       # Account metrics fragment
+│   ├── _strategies.html    # Strategy cards with controls
+│   ├── _positions.html     # Positions table fragment
+│   └── _logs.html          # Log tail fragment
 ├── strategies/
 │   ├── __init__.py
 │   ├── blueprint_strangle.py  # Blueprint strategy — starting template for traders
+│   ├── atm_straddle.py        # Daily ATM straddle with profit target + time exit
 │   ├── long_strangle_pnl_test.py  # Long strangle PnL monitoring test
-│   ├── reverse_iron_condor_live.py  # Reverse iron condor live trading
-│   └── rfq_endurance.py    # 3-cycle RFQ endurance test strategy
+│   └── reverse_iron_condor_live.py  # Reverse iron condor live trading
 ├── requirements.txt
-├── .env                    # API keys (gitignored)
+├── .env                    # API keys + dashboard password (gitignored)
 ├── docs/
 │   ├── ARCHITECTURE_PLAN.md
 │   ├── API_REFERENCE.md
@@ -102,19 +112,17 @@ CoincallTrader/
 ├── tests/
 │   ├── test_strategy_framework.py   # 72/72 unit assertions
 │   ├── test_strategy_layer.py       # 50 strategy layer assertions
-│   ├── test_complex_option_selection.py  # 32/32 compound selection assertions
+│   ├── test_atm_straddle.py         # ATM straddle strategy unit tests
 │   ├── test_execution_timing.py     # 40/40 ExecutionPhase, RFQParams, phased execution
-│   ├── test_rfq_comparison.py       # RFQ quote vs orderbook (strangle)
-│   ├── test_rfq_iron_condor.py      # RFQ quote vs orderbook (iron condor)
-│   └── test_rfq_reverse_iron_condor.py  # RFQ reverse iron condor monitoring
+│   ├── test_dashboard.py            # Standalone dashboard test with mock data
+│   └── test_complex_option_selection.py  # 32/32 compound selection assertions
 ├── logs/                   # Runtime logs (gitignored)
 └── archive/                # Legacy code (gitignored)
 ```
 
-**Current size:** 11 Python modules, ~5,000 lines total
+**Current size:** 16 Python modules + 6 HTML templates, ~7,000 lines total
 
 ### Future additions (when needed)
-- `dashboard/` — Web monitoring interface (FastAPI)
 - `persistence/` — SQLite state storage and crash recovery
 - Futures/spot modules may extend `market_data.py` and `trade_execution.py` directly rather than adding a package hierarchy
 
@@ -178,11 +186,11 @@ CoincallTrader/
 
 | Requirement | Priority | Description |
 |-------------|----------|-------------|
-| REQ-WD-01 | Medium | Strategy status display (running, paused, stopped) |
-| REQ-WD-02 | Medium | Open positions view with P&L and Greeks |
-| REQ-WD-03 | Medium | Account health (margin level, equity curve) |
-| REQ-WD-04 | Medium | Remote access (mobile-friendly) |
-| REQ-WD-05 | Low | Manual intervention (pause strategy, close position) |
+| REQ-WD-01 | ✅ **Done** | Strategy status display (running, paused, stopped) — dashboard strategy cards |
+| REQ-WD-02 | ✅ **Done** | Open positions view with P&L and Greeks — dashboard positions table |
+| REQ-WD-03 | ✅ **Partial** | Account health (margin level displayed; equity curve not yet) |
+| REQ-WD-04 | ✅ **Done** | Remote access — bind to 0.0.0.0, password-protected |
+| REQ-WD-05 | ✅ **Done** | Manual intervention — Pause/Resume/Stop per strategy + kill switch |
 
 ### 7. Persistence & Recovery
 
@@ -500,44 +508,75 @@ smart_config = SmartExecConfig(
 
 ---
 
-### Phase 6: Account Alerts & Monitoring (1 day)
+### Phase 6: Account Alerts & Monitoring (partially complete)
 **Goal:** Add proactive alerting on top of the existing `AccountSnapshot` infrastructure.
 
-**Already done:**
+**Done:**
 - `AccountSnapshot` with equity, available_margin, IM, MM, margin_utilisation, aggregated Greeks
 - Entry conditions: `min_available_margin_pct()`, `max_margin_utilization()`, `min_equity()`
+- **Telegram notifications** (v0.7.1): `telegram_notifier.py` — fire-and-forget alerts via Bot API. Trade opens/closes (PnL, ROI, hold time), daily account summary, startup/shutdown, critical errors. Wired at framework level — all strategies automatically notified.
 
 **Remaining tasks:**
-1. Margin alert system (email, webhook, or Telegram notifications)
+1. ~~Alert notification system~~ → Done via Telegram (`telegram_notifier.py`)
 2. Wallet holdings per asset (`GET /open/account/wallet/v1`)
 3. Historical P&L tracking
 
 **Deliverables:**
-- [ ] Alert notification system
+- [x] `telegram_notifier.py` — TelegramNotifier class (~200 lines, fire-and-forget, rate-limited)
+- [x] Framework integration — `TradingContext.notifier`, `StrategyRunner` auto-notifications on trade open/close
+- [x] `HealthChecker` integration — daily summary via Telegram
 - [ ] Wallet holdings integration
 - [ ] P&L history logging
 
 ---
 
-### Phase 7: Web Dashboard (2-3 days)
-**Goal:** Create a simple web interface for monitoring.
+### Phase 7: Web Dashboard ✅ COMPLETE (March 3, 2026)
+**Goal:** Create a simple web interface for monitoring and basic control.
 
-**Tasks:**
-1. Create FastAPI app (`dashboard.py` or `dashboard/` package):
-   - `GET /` - Dashboard home
-   - `GET /api/strategies` - Running strategies
-   - `GET /api/positions` - Current positions
-   - `GET /api/account` - Account info
-   - `GET /api/logs` - Recent log entries
+**Implementation Summary:**
 
-2. Simple HTML template with auto-refresh
+Chose **Flask + htmx** over FastAPI — simpler, no async rewrite, single `<script>` tag for htmx (CDN), zero JS to write. Runs as a daemon thread inside the existing process (no IPC, no separate service).
 
-3. Optional: Add authentication for remote access
+**Module:** `dashboard.py` (~280 lines)
+
+**Core Design:**
+- `DashboardLogHandler` — `logging.Handler` subclass with ring buffer (`deque`, 200 entries) attached to root logger. Captures all log output for the live tail without modifying existing log setup.
+- `_create_app()` — Flask app factory. Receives `TradingContext` and `runners` list, reads them directly. Session-based auth via `DASHBOARD_PASSWORD` env var.
+- `start_dashboard()` — Launches Flask on a daemon thread. If `DASHBOARD_PASSWORD` is not set, silently disables — zero impact.
+
+**Routes:**
+| Route | Method | Description |
+|-------|--------|-------------|
+| `/login` | GET/POST | Password login page |
+| `/logout` | GET | Clear session |
+| `/` | GET | Main dashboard page (full HTML) |
+| `/api/account` | GET | Account metrics fragment (htmx) |
+| `/api/strategies` | GET | Strategy cards fragment (htmx) |
+| `/api/positions` | GET | Positions table fragment (htmx) |
+| `/api/logs` | GET | Log tail fragment (htmx) |
+| `/api/strategy/<name>/pause` | POST | Call `runner.disable()` |
+| `/api/strategy/<name>/resume` | POST | Call `runner.enable()` |
+| `/api/strategy/<name>/stop` | POST | Call `runner.stop()` |
+| `/api/killswitch` | POST | Force-close all trades + Telegram alert |
+
+**Templates:** 6 Jinja2 files in `templates/`:
+- `dashboard.html` — Main page, CSS, htmx auto-polling (`every 3-5s` per panel)
+- `login.html` — Login form
+- `_account.html`, `_strategies.html`, `_positions.html`, `_logs.html` — htmx fragments
+
+**Key Design Decisions:**
+1. Flask over FastAPI — no async needed, simpler embedding in threaded app
+2. htmx over WebSocket — polling every 3-5s is sufficient when exchange data itself polls every 10s
+3. Daemon thread — if dashboard crashes, trading bot unaffected
+4. No core module changes — reads existing `AccountSnapshot`, `runner.stats`, `runner._enabled`
+5. Controls call existing methods — `enable()`, `disable()`, `stop()`, `force_close()`
 
 **Deliverables:**
-- [ ] Dashboard app
-- [ ] HTML templates
-- [ ] Basic CSS styling
+- [x] `dashboard.py` — Flask app, routes, log handler (~280 lines)
+- [x] `templates/` — 6 HTML files (dashboard, login, 4 fragments)
+- [x] `tests/test_dashboard.py` — Standalone test with mock data
+- [x] `main.py` — 3 lines added (import + `start_dashboard()` call)
+- [x] `requirements.txt` — Added `flask>=3.0.0`
 
 ---
 
@@ -575,7 +614,7 @@ smart_config = SmartExecConfig(
 | 4 | **Phase 4: Strategy Framework** | ✅ Done | Declarative strategies, entry/exit conditions, DI, dry-run |
 | 5 | Phase 5: Multi-Instrument | 2-3 days | Futures and spot support |
 | 6 | Phase 6: Account Alerts | 1 day | Margin alerts, wallet, P&L history |
-| 7 | Phase 7: Dashboard | 2-3 days | Web monitoring interface |
+| 7 | **Phase 7: Dashboard** | ✅ Done | Web monitoring + controls (Flask + htmx) |
 | 8 | Phase 8: Persistence | 1-2 days | State persistence and crash recovery |
 
 **Total estimated effort:** 15-22 days of focused development (12-14 days completed)
@@ -585,9 +624,9 @@ smart_config = SmartExecConfig(
 ## Open Questions
 
 1. **Persistence format:** SQLite vs JSON files vs something else?
-2. **Dashboard auth:** Simple password vs OAuth vs VPN-only access?
+2. ~~**Dashboard auth:** Simple password vs OAuth vs VPN-only access?~~ → Answered: session-based login via `DASHBOARD_PASSWORD` env var
 3. **Concurrent strategies:** Expected to run 2-3 or 10+?
-4. **Deployment target:** VPS, local machine, cloud?
+4. ~~**Deployment target:** VPS, local machine, cloud?~~ → Answered: Windows Server 2022 VPS (primary), macOS locally
 5. **Backtesting:** Is this a future requirement?
 
 ---
