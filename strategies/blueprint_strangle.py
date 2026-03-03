@@ -20,7 +20,7 @@ Framework features demonstrated:
   ✓ Execution via limit orders (orderbook)
 
 Not covered here (see other strategies or MODULE_REFERENCE.md):
-  - RFQ execution (rfq_endurance.py)
+  - RFQ execution (MODULE_REFERENCE.md § RFQ)
   - Smart orderbook execution (MODULE_REFERENCE.md § Smart Orderbook)
   - Custom multi-day state tracking (long_strangle_pnl_test.py in archive/)
   - Multi-leg structures like iron condors (reverse_iron_condor_live.py)

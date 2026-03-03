@@ -85,9 +85,9 @@ CoincallTrader/
 ├── strategies/
 │   ├── __init__.py                 # Re-exports strategy factories
 │   ├── blueprint_strangle.py       # Blueprint strangle — starting template for new strategies
+│   ├── atm_straddle.py            # Daily ATM straddle with profit target + time exit
 │   ├── reverse_iron_condor_live.py # Reverse iron condor live trading strategy
-│   ├── long_strangle_pnl_test.py   # Long strangle PnL monitoring test
-│   └── rfq_endurance.py            # 3-cycle RFQ endurance test strategy
+│   └── long_strangle_pnl_test.py   # Long strangle PnL monitoring test
 ├── strategy.py                     # StrategyConfig, StrategyRunner, entry/exit condition factories
 ├── config.py                       # Environment & global config (.env loading)
 ├── auth.py                         # HMAC-SHA256 API authentication
@@ -110,13 +110,10 @@ CoincallTrader/
 │   ├── API_REFERENCE.md            # Coincall exchange API endpoints & formats
 │   └── MODULE_REFERENCE.md         # Internal module docs (strategies, lifecycle, execution)
 ├── tests/
-│   ├── test_strategy_framework.py  # Unit tests — config, context, conditions (72/72)
-│   ├── test_strategy_layer.py      # Strategy layer integration tests (50)
-│   ├── test_complex_option_selection.py  # Compound option selection tests (32/32)
-│   ├── test_execution_timing.py    # ExecutionPhase, RFQParams, phased execution (40/40)
-│   ├── test_rfq_comparison.py      # RFQ quote vs orderbook monitoring (strangle)
-│   ├── test_rfq_iron_condor.py     # RFQ quote monitoring (iron condor)
-│   └── test_rfq_reverse_iron_condor.py  # RFQ reverse iron condor monitoring
+│   ├── test_strategy_framework.py  # Unit tests — config, context, conditions
+│   ├── test_strategy_layer.py      # Strategy layer integration tests
+│   ├── test_atm_straddle.py        # ATM straddle strategy unit tests
+│   └── test_execution_timing.py    # ExecutionPhase, RFQParams, phased execution
 ├── logs/                           # Runtime logs (gitignored)
 ├── archive/                        # Legacy code (gitignored)
 ├── CHANGELOG.md

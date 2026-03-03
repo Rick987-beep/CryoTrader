@@ -39,9 +39,9 @@ This document captures important context, decisions, and setup information for c
 
 ### Strategy Modules
 - **strategies/blueprint_strangle.py** — Blueprint strangle strategy (starting template for new strategies)
+- **strategies/atm_straddle.py** — Daily ATM straddle with profit target + time exit
 - **strategies/reverse_iron_condor_live.py** — Reverse iron condor live trading strategy
 - **strategies/long_strangle_pnl_test.py** — Long strangle PnL monitoring test
-- **strategies/rfq_endurance.py** — 3-cycle RFQ endurance test strategy with UTC scheduling
 
 ---
 
