@@ -37,7 +37,8 @@ class TradeExecutor:
         side: int,
         order_type: int = 1,
         price: Optional[float] = None,
-        client_order_id: Optional[str] = None
+        client_order_id: Optional[str] = None,
+        reduce_only: bool = False,  # BUG-2026-03-05: prevent close orders from building reverse positions
     ) -> Optional[Dict[str, Any]]:
         """Place a single order. Returns dict with orderId or None on error."""
         try:
@@ -50,6 +51,10 @@ class TradeExecutor:
             
             if price is not None:
                 payload['price'] = price
+            
+            # BUG-2026-03-05: reduce_only ensures close orders can never exceed open position
+            if reduce_only:
+                payload['reduceOnly'] = 1
             
             if client_order_id:
                 payload['clientOrderId'] = int(client_order_id)
@@ -286,19 +291,21 @@ class LimitFillManager:
             return phases[self._phase_index]
         return None
 
-    def place_all(self, legs: List[Dict[str, Any]]) -> bool:
+    def place_all(self, legs: List[Dict[str, Any]], reduce_only: bool = False) -> bool:
         """
         Place initial limit orders for all legs.
 
         Args:
             legs: List of dicts with keys: symbol, qty, side, order_id (out).
                   Each dict is a TradeLeg-like object (duck-typed).
+            reduce_only: If True, all orders are placed with reduceOnly flag.
 
         Returns:
             True if all orders placed successfully.
             On failure, already-placed orders are cancelled.
         """
         self._legs = []
+        self._reduce_only = reduce_only  # BUG-2026-03-05: remember for requotes
         now = time.time()
         self._round_started_at = now
         self._phase_started_at = now
@@ -311,20 +318,24 @@ class LimitFillManager:
         else:
             phase_label = "aggressive (legacy)"
 
+        # BUG-2026-03-05: pre-validate all prices before placing any orders.
+        # Prevents partial placement when one leg has no orderbook liquidity.
+        leg_data = []
         for leg in legs:
             symbol = leg.symbol if hasattr(leg, 'symbol') else leg['symbol']
             qty = leg.qty if hasattr(leg, 'qty') else leg['qty']
             side = leg.side if hasattr(leg, 'side') else leg['side']
-
             price = self._get_price_for_current_mode(symbol, side)
             if price is None:
                 side_label = "buy" if side == 1 else "sell"
                 logger.error(f"LimitFillManager: no orderbook price for {symbol} ({side_label})")
-                self.cancel_all()
-                return False
+                return False  # no orders placed yet — nothing to cancel
+            leg_data.append((leg, symbol, qty, side, price))
 
+        for leg, symbol, qty, side, price in leg_data:
             result = self._executor.place_order(
                 symbol=symbol, qty=qty, side=side, order_type=1, price=price,
+                reduce_only=reduce_only,  # BUG-2026-03-05: pass reduce_only to exchange
             )
             if not result:
                 logger.error(f"LimitFillManager: failed to place order for {symbol}")
@@ -522,6 +533,7 @@ class LimitFillManager:
                     side=ls.side,
                     order_type=1,
                     price=price,
+                    reduce_only=getattr(self, '_reduce_only', False),  # BUG-2026-03-05
                 )
                 if result:
                     ls.order_id = str(result.get('orderId', ''))

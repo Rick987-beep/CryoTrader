@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.3] - 2026-03-05
+
+### Fixed — Runaway Short Position on Close (Critical)
+
+- **`reduce_only` on all close orders** (`trade_execution.py`, `trade_lifecycle.py`) — Close orders now set `reduceOnly=1` on the exchange API, making it physically impossible for close orders to build a reverse position. This is the primary fix: even if retry logic has bugs, the exchange rejects any order that would exceed the open position size.
+- **Pre-validate all leg prices before placing orders** (`trade_execution.py`) — `LimitFillManager.place_all()` now gathers prices for ALL legs in a first pass. If any leg has no orderbook liquidity, it returns `False` immediately with zero orders placed. This eliminates the partial-placement-then-cancel race condition where one leg fills instantly while the cancel for rollback arrives too late.
+- **Close attempt circuit breaker** (`trade_lifecycle.py`) — `_close_limit()` now tracks `_close_attempt_count` on the trade. After 10 failed attempts, the trade transitions to `FAILED` and sends a Telegram alert for manual intervention. Prevents infinite retry loops.
+
+### Root Cause
+
+A straddle close at 19:00 UTC triggered when one leg (put) had no orderbook bids. The old `place_all()` placed leg 1 (call sell), then discovered leg 2 had no price, tried to cancel leg 1, but it had already filled. This fill was silently lost. On retry, `_close_limit()` rebuilt close legs from scratch (unaware of the fill), placed another sell for the full quantity, and the cycle repeated 72 times — accumulating a ~0.64 BTC naked short position until margin was exhausted.
+
+### Files Changed
+- `trade_execution.py` — `place_order()`: added `reduce_only` param; `place_all()`: added `reduce_only` param + price pre-validation; `_requote_unfilled()`: passes `reduce_only` through
+- `trade_lifecycle.py` — `_close_limit()`: `reduce_only=True` on close orders + circuit breaker (10 attempts → FAILED + Telegram alert)
+
+---
+
 ## [0.9.2] - 2026-03-05
 
 ### Fixed

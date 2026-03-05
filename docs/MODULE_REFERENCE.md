@@ -1,6 +1,6 @@
 # CoincallTrader — Module Reference
 
-**Last Updated:** March 4, 2026
+**Last Updated:** March 5, 2026
 
 Internal documentation for the CoincallTrader application modules.
 For Coincall exchange API endpoints, see [API_REFERENCE.md](API_REFERENCE.md).
@@ -230,7 +230,7 @@ lifecycle_manager.force_close(trade.trade_id)
 | `TradeState` | Enum: PENDING_OPEN → OPENING → OPEN → PENDING_CLOSE → CLOSING → CLOSED \| FAILED |
 | `TradeLeg` | Single leg: symbol, qty, side, order_id, fill_price, filled_qty |
 | `TradeLifecycle` | Groups legs with exit conditions; computes PnL, Greeks (pro-rated by our qty share). Optional `execution_params` and `rfq_params` typed fields. |
-| `LifecycleManager` | State machine: `create()`, `open()`, `close()`, `tick()`, `force_close()` |
+| `LifecycleManager` | State machine: `create()`, `open()`, `close()`, `tick()`, `force_close()`. Close orders use `reduce_only=True` and a 10-attempt circuit breaker. |
 | `RFQParams` | Typed RFQ config: `timeout_seconds`, `min_improvement_pct`, `fallback_mode` |
 
 ### Exit Condition Factories
@@ -320,6 +320,22 @@ params = ExecutionParams(phases=[
 | `aggressive_buffer_pct` | `float` | `2.0` | Aggressive buffer % (legacy mode) |
 | `max_requote_rounds` | `int` | `10` | Max requote rounds (legacy mode) |
 | `phases` | `list[ExecutionPhase]\|None` | `None` | Phased execution config (overrides legacy) |
+
+### Close-Order Safety (v0.9.3)
+
+**`reduce_only` flag:** All close orders are placed with `reduceOnly=1` on the exchange API. This is an exchange-level guarantee that a close order can never exceed the open position size — it physically cannot create a reverse position regardless of retry logic bugs.
+
+**Price pre-validation:** `place_all()` validates prices for ALL legs before placing ANY orders. If one leg has no orderbook liquidity, no orders are placed at all. This prevents the partial-placement race condition where one leg fills while the other's cancel arrives too late.
+
+**Circuit breaker:** `_close_limit()` tracks close attempts per trade. After 10 failed attempts, the trade transitions to `FAILED` and a Telegram alert is sent. This prevents infinite retry loops when market conditions make closing impossible.
+
+```python
+# Close orders are always reduce_only — set automatically by _close_limit()
+mgr.place_all(trade.close_legs, reduce_only=True)
+
+# place_order() passes it to the exchange API
+payload['reduceOnly'] = 1  # exchange rejects if order > open position
+```
 
 ### Complete Strategy Example
 

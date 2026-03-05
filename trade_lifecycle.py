@@ -974,12 +974,27 @@ class LifecycleManager:
             logger.info(f"Trade {trade.id}: all close legs already filled → CLOSED (PnL={trade.realized_pnl:+.4f})")
             return True
 
+        # BUG-2026-03-05: circuit breaker — stop retrying after N failures
+        MAX_CLOSE_ATTEMPTS = 10
+        count = trade.metadata.get("_close_attempt_count", 0) + 1
+        trade.metadata["_close_attempt_count"] = count
+        if count > MAX_CLOSE_ATTEMPTS:
+            trade.state = TradeState.FAILED
+            trade.error = f"Close failed after {MAX_CLOSE_ATTEMPTS} attempts — manual intervention required"
+            logger.critical(f"Trade {trade.id}: {trade.error}")
+            try:
+                get_notifier().notify_error(f"🚨 Trade {trade.id}: {trade.error}")
+            except Exception:
+                pass
+            return False
+
         params = trade.execution_params or trade.metadata.get("execution_params") or ExecutionParams()
         mgr = LimitFillManager(self._executor, params)
 
-        ok = mgr.place_all(trade.close_legs)
+        # BUG-2026-03-05: reduce_only prevents close orders from building reverse positions
+        ok = mgr.place_all(trade.close_legs, reduce_only=True)
         if not ok:
-            logger.error(f"Trade {trade.id}: failed to place close orders, will retry")
+            logger.error(f"Trade {trade.id}: failed to place close orders, will retry (attempt {count}/{MAX_CLOSE_ATTEMPTS})")
             trade.state = TradeState.PENDING_CLOSE
             return False
 
