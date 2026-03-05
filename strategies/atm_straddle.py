@@ -48,7 +48,7 @@ QTY = 0.01                          # BTC per leg (0.01 = small test size)
 DTE = "next"                        # expiry: "next" available (nearest, typically next-day 08:00 UTC)
 
 # Scheduling — when to open and close
-OPEN_HOUR = 13                      # UTC hour to open the straddle
+OPEN_HOUR = 12                      # UTC hour to open the straddle
 CLOSE_HOUR = 19                     # UTC hour to force-close (hard exit)
 CLOSE_MINUTE = 0                    # UTC minute for the hard close
 

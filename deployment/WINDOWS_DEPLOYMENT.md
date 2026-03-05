@@ -185,19 +185,21 @@ Get-Content -Path "C:\CoincallTrader\logs\trading.log" -Tail 20 -Wait
 # Schedule it with Task Scheduler to run daily
 ```
 
-### 5.2 Health Check Script
-```powershell
-# See health_check.ps1 below
-# Schedule to run every 15 minutes
-```
+### 5.2 Process Supervision
 
-### 5.3 Configure Windows Task Scheduler for Monitoring
-1. Open Task Scheduler
-2. Create Basic Task:
-   - Name: "CoincallTrader Health Check"
-   - Trigger: Daily, repeat every 15 minutes
-   - Action: Start a program → `powershell.exe`
-   - Arguments: `-File C:\CoincallTrader\deployment\health_check.ps1`
+NSSM is the **sole process supervisor** — it handles auto-restart on crash
+and auto-start on boot via the config in Step 4.2.
+
+> **Important:** Do NOT add a separate health_check.ps1 Task Scheduler entry.
+> Previous versions used a PowerShell health check script that would restart
+> the service when logs appeared stale, but this conflicts with NSSM and causes
+> unnecessary restart loops (especially when the bot is idle with no positions).
+> If you have an existing "CoincallTrader Health Check" task in Task Scheduler,
+> **disable or delete it**.
+
+Health observability is handled by the built-in `HealthChecker` module inside
+the Python application (logs every 5 min).  Daily Telegram summaries are sent
+by `TelegramNotifier` from the main event loop.
 
 ---
 
@@ -273,7 +275,6 @@ C:\CoincallTrader\
 │   └── service_error.log      # Service stderr
 ├── deployment\
 │   ├── setup.ps1              # Automated setup script
-│   ├── health_check.ps1       # Health monitoring
 │   └── rotate_logs.ps1        # Log rotation
 ├── main.py                     # Entry point
 ├── config.py                   # Configuration
@@ -292,7 +293,7 @@ C:\CoincallTrader\
 - [ ] Service set to auto-start
 - [ ] Service running successfully
 - [ ] Logs are being written
-- [ ] Health check scheduled in Task Scheduler
+- [ ] No stale health_check.ps1 Task Scheduler entry (delete if present)
 - [ ] Log rotation scheduled
 - [ ] Firewall configured
 - [ ] File permissions restricted

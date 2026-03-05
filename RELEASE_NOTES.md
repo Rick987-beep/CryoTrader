@@ -1,3 +1,82 @@
+# Release Notes — v0.9.1 "Streamlined Supervision"
+
+**Release Date:** March 5, 2026  
+**Previous Version:** v0.9.0 (Hardened Operations)
+
+---
+
+## Overview
+
+v0.9.1 eliminates overlapping restart/recovery systems that caused a restart loop (stop → start → daily summary every ~45 min). Three independent systems — NSSM, `health_check.ps1`, and the crash flag — all competed for "keep the bot alive" responsibility. Now each module does exactly one thing.
+
+---
+
+## Problem
+
+Three systems fought over process restart:
+
+| Layer | What it did | Side effect |
+|---|---|---|
+| **NSSM** | OS-level service supervisor — restart on crash, start on boot | Correct tool for the job |
+| **health_check.ps1** (Task Scheduler, 15 min) | Checked service status and log staleness (30 min threshold), restarted service | Caused restart loop when bot was idle (no positions = stale logs) |
+| **Crash flag** (`logs/.running`) | Written on start, removed on clean shutdown — gated crash recovery | Fragile: not cleaned on kill -9 or NSSM stop; lost on manual rm |
+
+Each restart triggered Telegram notifications (stopped → started → daily summary), flooding the channel.
+
+## Changes
+
+### 1. Deleted `deployment/health_check.ps1`
+
+Fully redundant with NSSM. The Task Scheduler entry on the Windows Server should also be disabled/deleted.
+
+### 2. Slimmed `health_check.py` to observability only
+
+Removed the `notifier` parameter and the `notify_daily_summary()` call. The module now only logs health status every 5 min and escalates to WARNING on high margin / low equity. No side effects, no notifications.
+
+### 3. Moved daily summary to main event loop
+
+Added `_maybe_send_daily_summary()` to the main loop (called every 10s, date-gated inside `TelegramNotifier.maybe_send_daily_summary()`). The daily summary is now the notifier's responsibility, not the health checker's.
+
+### 4. Removed crash flag — idempotent trade recovery
+
+Removed `RUNNING_FLAG` (`logs/.running`) and all associated write/cleanup logic. `_recover_trades()` now runs on every startup. If the snapshot has active trades, it recovers them (verifying against the exchange). If not, it's a no-op. The snapshot + exchange verification is the real safety net, not a flag file.
+
+### 5. Deleted `close_all_positions.py`
+
+Obsolete standalone prototype. The proper kill switch logic lives in `position_closer.py` and is integrated with the dashboard.
+
+## Files Changed
+
+| File | Change |
+|------|--------|
+| `deployment/health_check.ps1` | **DELETED** — redundant with NSSM |
+| `close_all_positions.py` | **DELETED** — superseded by `position_closer.py` |
+| `health_check.py` | Removed `notifier` param and daily summary trigger; pure observability |
+| `telegram_notifier.py` | Renamed `notify_daily_summary` → `maybe_send_daily_summary` |
+| `main.py` | Removed crash flag; trade recovery runs every startup; daily summary in main loop |
+| `deployment/WINDOWS_DEPLOYMENT.md` | Removed health_check.ps1 references; NSSM is sole supervisor |
+| `PROJECT_CONTEXT.md` | Updated threading model, module descriptions, resilience section |
+
+## Module Responsibilities (After)
+
+| Module | Single Responsibility |
+|---|---|
+| **NSSM** | Process supervisor: restart on crash, start on boot |
+| **`health_check.py`** | Observability: log health status every 5 min |
+| **`telegram_notifier.py`** | All Telegram messaging including daily summary |
+| **`main.py`** | Startup, wiring, trade recovery, main loop, shutdown |
+| **`trade_lifecycle.py`** | Trade state machine + snapshot persistence |
+| **`persistence.py`** | Completed trade history (JSONL) |
+
+## Deployment Notes
+
+1. **Disable the "CoincallTrader Health Check" Task Scheduler entry** on the Windows Server
+2. Deploy the updated code and restart the NSSM service
+3. Optionally delete `logs/.running` if present (no longer used)
+
+---
+---
+
 # Release Notes — v0.9.0 "Hardened Operations"
 
 **Release Date:** March 4, 2026  

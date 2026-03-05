@@ -52,19 +52,21 @@ STRATEGIES = [
     # reverse_iron_condor_live,
 ]
 
-RUNNING_FLAG = "logs/.running"
-
-
 # =============================================================================
-# Crash Recovery
+# Trade Recovery
 # =============================================================================
 
 def _recover_trades(ctx, runners):
-    """Attempt to recover active trades after a crash.
+    """Attempt to recover active trades from the persisted snapshot.
 
-    Loads trades from the LifecycleManager snapshot, reconstructs
-    TradeLifecycle objects, re-attaches exit conditions from the
-    matching strategy configs, and verifies positions on the exchange.
+    Called on every startup.  If the snapshot contains active trades
+    (OPEN, OPENING, PENDING_CLOSE, CLOSING), reconstructs TradeLifecycle
+    objects, re-attaches exit conditions from the matching strategy
+    configs, and verifies positions on the exchange.
+
+    This is idempotent: a clean snapshot with no active trades simply
+    returns 0.  The crash-flag file is no longer used — the snapshot
+    combined with exchange verification is the source of truth.
 
     Returns:
         Number of active trades recovered, or None on critical failure.
@@ -194,7 +196,6 @@ def main():
     health_checker = HealthChecker(
         check_interval=300,  # 5 minutes
         account_snapshot_fn=lambda: ctx.position_monitor.snapshot(),
-        notifier=notifier,
     )
 
     # ── Register strategies ──────────────────────────────────────────────
@@ -223,31 +224,22 @@ def main():
         print("\n✗ FATAL: No valid strategies to run")
         sys.exit(1)
 
-    # ── Crash Recovery ────────────────────────────────────────────────────
-    if os.path.exists(RUNNING_FLAG):
-        logger.warning("Crash flag detected — previous run did not shut down cleanly")
-        recovered = _recover_trades(ctx, runners)
-        if recovered is None:
-            logger.error("CRITICAL: State recovery failed — manual intervention required")
-            notifier.notify_error(
-                "CRITICAL: Crash recovery failed. "
-                "Check exchange positions and logs manually."
-            )
-            print("\n✗ CRITICAL: Could not recover from crash. Check logs and positions.")
-            sys.exit(1)
-        elif recovered > 0:
-            logger.info(f"Successfully recovered {recovered} active trade(s)")
-            notifier.notify_error(
-                f"Crash recovery: restored {recovered} active trade(s). "
-                f"Resuming normal operation."
-            )
-        else:
-            logger.info("Crash flag present but no active trades to recover")
-
-    # Write crash flag (cleared on clean shutdown)
-    os.makedirs("logs", exist_ok=True)
-    with open(RUNNING_FLAG, "w") as f:
-        f.write(str(time.time()))
+    # ── Trade Recovery (idempotent — runs on every startup) ────────────
+    recovered = _recover_trades(ctx, runners)
+    if recovered is None:
+        logger.error("CRITICAL: State recovery failed — manual intervention required")
+        notifier.notify_error(
+            "CRITICAL: Trade recovery failed. "
+            "Check exchange positions and logs manually."
+        )
+        print("\n✗ CRITICAL: Could not recover trades. Check logs and positions.")
+        sys.exit(1)
+    elif recovered > 0:
+        logger.info(f"Successfully recovered {recovered} active trade(s)")
+        notifier.notify_error(
+            f"Trade recovery: restored {recovered} active trade(s). "
+            f"Resuming normal operation."
+        )
 
     # ── Start services ────────────────────────────────────────────────────
     try:
@@ -284,12 +276,6 @@ def main():
             logger.info("Shutdown complete")
         except Exception as e:
             logger.error(f"Error during shutdown: {e}", exc_info=True)
-        # Clear crash flag — clean shutdown
-        try:
-            if os.path.exists(RUNNING_FLAG):
-                os.remove(RUNNING_FLAG)
-        except Exception:
-            pass
         sys.exit(0)
 
     signal.signal(signal.SIGINT, shutdown)
@@ -300,10 +286,27 @@ def main():
     consecutive_errors = 0
     max_consecutive_errors = 10
 
+    def _maybe_send_daily_summary():
+        """Trigger daily Telegram summary if due (date-gated inside notifier)."""
+        try:
+            snapshot = ctx.position_monitor.snapshot()
+            if snapshot:
+                notifier.maybe_send_daily_summary(
+                    equity=snapshot.equity,
+                    unrealized_pnl=snapshot.unrealized_pnl,
+                    net_delta=snapshot.net_delta,
+                    positions=snapshot.positions,
+                )
+        except Exception:
+            pass  # Never let notification failure affect the main loop
+
     try:
         while True:
             try:
                 time.sleep(10)
+
+                # Daily Telegram summary (date-gated, at most once per day)
+                _maybe_send_daily_summary()
                 
                 # Log health status periodically
                 active_count = sum(1 for r in runners if r.active_trades)

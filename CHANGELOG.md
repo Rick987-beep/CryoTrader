@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-03-05
+
+### Removed - Streamlined Supervision
+
+- **`deployment/health_check.ps1`** (DELETED) — PowerShell health check script was redundant with NSSM and caused restart loops when the bot was idle (stale log detection triggered unnecessary service restarts every ~45 min).
+- **`close_all_positions.py`** (DELETED) — Obsolete standalone prototype, superseded by `position_closer.py` which is integrated with the dashboard kill switch.
+- **Crash flag** (`logs/.running`) — Removed `RUNNING_FLAG` write/cleanup logic from `main.py`. The file was fragile (not cleaned on kill -9 or NSSM stop) and unnecessary — the trade snapshot + exchange verification is the actual safety net.
+
+### Changed
+
+- **`health_check.py`** — Removed `notifier` parameter and `notify_daily_summary()` call. Now pure observability: logs health status every 5 min, escalates on high margin/low equity, no side effects.
+- **`telegram_notifier.py`** — Renamed `notify_daily_summary()` → `maybe_send_daily_summary()` to clarify it's date-gated and safe to call on every tick.
+- **`main.py`** — Trade recovery (`_recover_trades()`) now runs on every startup (idempotent — no active trades = no-op). Added `_maybe_send_daily_summary()` to main event loop (called every 10s, date-gated inside notifier). Removed crash flag write/cleanup.
+- **`deployment/WINDOWS_DEPLOYMENT.md`** — Removed health_check.ps1 Task Scheduler section; added note that NSSM is the sole process supervisor.
+- **`PROJECT_CONTEXT.md`** — Updated threading model, module descriptions, and resilience section.
+
+---
+
 ## [0.9.0] - 2026-03-04
 
 ### Added - Hardened Operations

@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-Health Check Module
+Health Check Module — Observability Only
 
 Logs system health status every 5 minutes.
+Pure observability: no restart logic, no notifications.
+Process supervision is handled by NSSM; daily summary by TelegramNotifier.
+
 Provides visibility into:
-- API connectivity
-- Active positions
-- Account equity/margin
 - Uptime tracking
+- Account equity/margin
+- Active positions
+- Warning escalation for high margin / low equity
 """
 
 import logging
@@ -20,20 +23,18 @@ logger = logging.getLogger(__name__)
 
 
 class HealthChecker:
-    """Monitors and logs system health at regular intervals."""
+    """Logs system health at regular intervals. Observability only — no side effects."""
 
-    def __init__(self, check_interval: int = 300, account_snapshot_fn: Optional[Callable] = None, notifier=None):
+    def __init__(self, check_interval: int = 300, account_snapshot_fn: Optional[Callable] = None):
         """
         Initialize health checker.
 
         Args:
             check_interval: Interval between health checks in seconds (default 5 min = 300s)
             account_snapshot_fn: Function to call for latest account snapshot
-            notifier: Optional TelegramNotifier for daily summary alerts
         """
         self.check_interval = check_interval
         self.account_snapshot_fn = account_snapshot_fn
-        self._notifier = notifier
         self._running = False
         self._thread = None
         self._start_time = time.time()
@@ -112,18 +113,6 @@ class HealthChecker:
                     if snapshot.equity < 100:
                         log_level = logging.WARNING
                         status_lines.append("⚠ LOW EQUITY")
-
-                    # Telegram daily summary (wall-clock gated inside notifier)
-                    if self._notifier:
-                        try:
-                            self._notifier.notify_daily_summary(
-                                equity=snapshot.equity,
-                                unrealized_pnl=snapshot.unrealized_pnl,
-                                net_delta=snapshot.net_delta,
-                                positions=snapshot.positions,
-                            )
-                        except Exception:
-                            pass  # Never let notification failure affect health checks
 
                 else:
                     log_level = logging.WARNING

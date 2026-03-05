@@ -167,7 +167,7 @@ class TelegramNotifier:
             f"Entry cost: ${entry_cost:.2f}"
         )
 
-    def notify_daily_summary(
+    def maybe_send_daily_summary(
         self,
         equity: float,
         unrealized_pnl: float,
@@ -177,7 +177,7 @@ class TelegramNotifier:
         """
         Send a daily account summary at a fixed wall-clock time (07:00 UTC).
 
-        Called frequently by HealthChecker (every 5 min).  Internally gated
+        Called every 10 s from the main event loop.  Internally gated
         by date string — sends at most once per calendar day, and only
         after self._daily_hour UTC.  Immune to process restarts (uses date,
         not elapsed time).

@@ -1,7 +1,7 @@
 # CoincallTrader — Project Context for AI Agents
 
-**Version:** 0.9.0  
-**Last Updated:** 4 March 2026  
+**Version:** 0.9.1  
+**Last Updated:** 5 March 2026  
 **Python:** 3.9+ (no 3.10+ syntax — use `Optional[X]`, not `X | None`)
 
 Automated BTC/ETH options trading bot for the Coincall exchange.
@@ -127,9 +127,9 @@ All daemon threads — if the main process dies, everything dies.
 
 | Thread | Source | Interval |
 |--------|--------|----------|
-| Main | `main.py` — sleep loop, crash flag management | 10 s |
+| Main | `main.py` — sleep loop, daily summary trigger | 10 s |
 | PositionMonitor | `account_manager.py` — polls positions → fires callbacks | 10 s |
-| HealthChecker | `health_check.py` — logs status, triggers Telegram daily summary | 5 min |
+| HealthChecker | `health_check.py` — logs health status (observability only) | 5 min |
 | Dashboard | `dashboard.py` — Flask + htmx web server | continuous |
 | PositionCloser | `position_closer.py` — emergency two-phase close (only when kill switch activated) | one-shot |
 
@@ -165,12 +165,12 @@ All daemon threads — if the main process dies, everything dies.
 |------|---------|
 | `account_manager.py` | `AccountManager`, `AccountSnapshot`, `PositionSnapshot`, `PositionMonitor`. |
 | `persistence.py` | `TradeStatePersistence` — append-only `trade_history.jsonl`. Completed trades only. |
-| `health_check.py` | `HealthChecker` — logs every 5 min, escalates on high margin/low equity, triggers daily Telegram summary. |
+| `health_check.py` | `HealthChecker` — logs every 5 min, escalates on high margin/low equity. Observability only — no notifications, no restart logic. |
 
 ### Notifications & UI
 | File | Purpose |
 |------|---------|
-| `telegram_notifier.py` | `TelegramNotifier` — startup/shutdown, trade open/close, daily summary (07:00 UTC), strategy pause/resume/stop, errors. Fire-and-forget, rate-limited. |
+| `telegram_notifier.py` | `TelegramNotifier` — startup/shutdown, trade open/close, daily summary (`maybe_send_daily_summary`, 07:00 UTC, called from main loop), strategy pause/resume/stop, errors. Fire-and-forget, rate-limited. |
 | `dashboard.py` | Flask + htmx web dashboard. Session auth, daemon thread. Routes: account, strategies, positions, logs, pause/resume/stop, kill switch (two-phase mark-price close). |
 | `position_closer.py` | `PositionCloser` — emergency two-phase mark-price position closer. Phase 1: mark price (5 min). Phase 2: aggressive ±10% (2 min). Background thread. Kill switch only. |
 | `templates/` | 6 HTML files: `dashboard.html`, `login.html`, `_account.html`, `_strategies.html`, `_positions.html`, `_logs.html`. |
@@ -235,12 +235,13 @@ DASHBOARD_PORT=8080                 # optional, default 8080
 
 All hardening is built-in — no configuration needed:
 
+- **Process supervision**: NSSM on Windows Server — sole responsibility for restart on crash, auto-start on boot. No external health-check scripts or Task Scheduler entries.
 - **Request timeouts**: 30 s on every API call (`auth.py`)
 - **@retry**: Exponential backoff for ConnectionError/Timeout only (`retry.py`)
 - **Error isolation**: Main loop tolerates up to 10 consecutive errors, then exits and notifies via Telegram (`main.py`)
 - **Market data cache**: 30 s TTL, 100-entry LRU (`market_data.py`)
 - **Trade persistence**: Active trades serialized via `to_dict()` to `logs/trades_snapshot.json` on every tick; completed trades appended to `logs/trade_history.jsonl` (`trade_lifecycle.py`, `persistence.py`)
-- **Crash recovery**: `logs/.running` crash flag written on start, removed on clean shutdown. On restart with flag, `_recover_trades()` loads snapshot, verifies exchange positions, re-attaches exit conditions, normalizes transient states. All-or-nothing: fails to manual intervention if inconsistent (`main.py`)
+- **Trade recovery**: On every startup, `_recover_trades()` checks the snapshot for active trades, verifies against exchange positions, re-attaches exit conditions, normalizes transient states. Idempotent — a clean snapshot with no active trades is a no-op. All-or-nothing: fails to manual intervention if inconsistent (`main.py`)
 - **Kill switch**: `PositionCloser` — two-phase mark-price close bypasses `LimitFillManager` (which requires both bids and asks). Phase 1: mark price. Phase 2: aggressive ±10%. Emergency procedure only (`position_closer.py`)
 
 ---

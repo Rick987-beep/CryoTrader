@@ -3,7 +3,7 @@
 A strategy-driven options trading system for the [Coincall](https://www.coincall.com/) exchange.  
 Strategies are declared as configuration — not coded as classes — and the framework handles entry checks, leg resolution, execution, lifecycle management, and exits automatically.
 
-**Current version:** 0.9.0 — Hardened Operations
+**Current version:** 0.9.1 — Streamlined Supervision
 
 ## Highlights
 
@@ -21,12 +21,12 @@ Strategies are declared as configuration — not coded as classes — and the fr
 - **Telegram notifications**: Trade opens/closes, daily account summary (07:00 UTC), strategy pause/resume/stop, critical errors ✅
 - **Web dashboard**: Real-time browser UI (Flask + htmx) — account status, strategy controls, positions table, log tail, kill switch ✅
 - **Kill switch**: Two-phase mark-price position closer — mark price (5 min) then aggressive ±10% (2 min), with Telegram progress ✅
-- **Crash recovery**: Crash flag detection, trade snapshot serialization (`to_dict`/`from_dict`), exchange position verification, all-or-nothing restore ✅
+- **Crash recovery**: Idempotent trade recovery from snapshot on every startup — verifies exchange positions, re-attaches exit conditions, all-or-nothing restore ✅
 - **Position monitoring**: Background polling with live Greeks, PnL, account snapshots, and tick-driven strategy execution ✅
 - **Multi-leg native**: Strangles, Iron Condors, Butterflies — any structure as one lifecycle ✅
 - **HMAC-SHA256 authentication**: Secure API access via `auth.py` ✅
 - **Phase 1 Hardening**: Request timeouts (30s), exponential backoff retries (1-2-4s), main loop error isolation ✅ 
-- **Phase 2 Reliability**: Market data caching (30s TTL), trade state persistence (tick snapshots), health check logging (5min intervals) ✅
+- **Phase 2 Reliability**: Market data caching (30s TTL), trade state persistence (tick snapshots), health check logging (5min intervals, observability only) ✅
 
 ## Quick Start
 
