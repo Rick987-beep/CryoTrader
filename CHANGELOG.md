@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-03-11
+
+### Added — Phase 3 Hardening
+
+Live-testing revealed three issues (all fixed) and prompted additional hardening.
+
+#### Reconciliation Grace Period
+- **`order_manager.py`** — `reconcile()` now skips PENDING orders and orders placed within the last 30 seconds. Prevents false "stale ledger entry" warnings for orders that haven't been acknowledged by the exchange yet.
+
+#### Requote Skip-if-Unchanged
+- **`trade_execution.py`** — `_requote_unfilled()` skips requoting when the new price is within $0.01 of the existing order price (tolerance check instead of exact float `==`). Avoids wasteful cancel+replace cycles on stable markets. Logged at INFO level when skipped.
+
+#### Strategy Restart Prevention
+- **`strategies/test_strangle_11mar.py`** — Set `max_trades_per_day=1` (was 3) and `cooldown_seconds=120` (was 0) to prevent the strategy from restarting after a successful close.
+
+#### Dashboard Orders Panel
+- **`dashboard.py`** — Added `/api/orders` route exposing the `OrderManager` ledger.
+- **`templates/_orders.html`** — New htmx fragment: active orders table with status, purpose, timestamps.
+
+#### Testing
+- **`tests/test_phase3_hardening.py`** (NEW) — 21 assertions: reconciliation (Telegram alerts, dashboard /api/orders route, grace period for PENDING orders, grace period for recently placed orders), structural integration.
+
+### Changed — Code Cleanup
+
+Post-v1.0.0 cleanup: removed dead code, stale backward-compatibility shims, and unused strategies.
+
+#### Removed
+- **`SmartOrderbookExecutor` integration** — Removed from `ExecutionRouter`. The `multileg_orderbook.py` module still exists as a standalone tool but is no longer routed to by the engine. `ExecutionRouter` now only supports `limit` and `rfq` modes.
+- **`LifecycleManager` backward-compat alias** — Removed `__getattr__` lazy re-export from `trade_lifecycle.py`. Use `from lifecycle_engine import LifecycleEngine` directly.
+- **`SmartExecConfig`** — Removed from `trade_lifecycle.py` (was dead code after smart executor decoupling).
+- **`ctx.notifier` and `ctx.smart_executor`** — Removed from `TradingContext` in `strategy.py`.
+- **`strategies/long_strangle_pnl_test.py`** (DELETED) — Unused PnL monitoring test strategy.
+- **`strategies/reverse_iron_condor_live.py`** (DELETED) — Unused reverse iron condor strategy.
+
+### Documentation
+- **`docs/MODULE_REFERENCE.md`** — Updated TradingContext fields, fixed LifecycleManager→LifecycleEngine references, removed backward-compat note, updated Telegram integration (strategy-level opt-in), added reconciliation grace period and requote skip docs, added `/api/orders` route.
+- **`docs/ARCHITECTURE_PLAN.md`** — Updated directory structure (removed dead strategies, added `_orders.html`), fixed ExecutionRouter description (limit/rfq only), updated test counts, fixed LifecycleManager→LifecycleEngine references.
+
+### Files Changed
+- MODIFIED: `order_manager.py` (reconciliation grace period)
+- MODIFIED: `trade_execution.py` (requote skip-if-unchanged)
+- MODIFIED: `strategies/test_strangle_11mar.py` (max_trades_per_day, cooldown)
+- MODIFIED: `dashboard.py` (+/api/orders route)
+- MODIFIED: `execution_router.py` (smart executor removed)
+- MODIFIED: `lifecycle_engine.py` (SmartExecConfig references removed)
+- MODIFIED: `trade_lifecycle.py` (LifecycleManager alias, SmartExecConfig removed)
+- MODIFIED: `strategy.py` (ctx.notifier, ctx.smart_executor removed)
+- MODIFIED: `strategies/__init__.py` (dead strategy imports removed)
+- DELETED: `strategies/long_strangle_pnl_test.py`
+- DELETED: `strategies/reverse_iron_condor_live.py`
+- NEW: `templates/_orders.html`
+- NEW: `tests/test_phase3_hardening.py` (21 assertions)
+- NEW: `strategies/test_strangle_11mar.py` (live test strategy)
+
+---
+
 ## [1.0.0] - 2026-03-09
 
 ### Added — Order Management & Structural Split

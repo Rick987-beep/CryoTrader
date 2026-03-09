@@ -166,6 +166,38 @@ def _create_app(
             return "<p class='muted'>No open positions</p>"
         return render_template("_positions.html", positions=snap.positions)
 
+    @app.route("/api/orders")
+    @login_required
+    def api_orders():
+        om = ctx.lifecycle_manager._order_manager
+        engine = ctx.lifecycle_manager
+
+        # Collect live (non-terminal) orders, sorted newest first
+        live_orders = sorted(
+            [r for r in om._orders.values() if r.is_live],
+            key=lambda r: r.placed_at,
+            reverse=True,
+        )
+
+        # Recent terminal orders (last 10, most recent first)
+        recent_terminal = sorted(
+            [r for r in om._orders.values() if r.is_terminal],
+            key=lambda r: (r.terminal_at or r.placed_at),
+            reverse=True,
+        )[:10]
+
+        recon_warnings = engine.last_reconciliation_warnings
+        recon_time = engine.last_reconciliation_time
+
+        return render_template(
+            "_orders.html",
+            live_orders=live_orders,
+            recent_terminal=recent_terminal,
+            recon_warnings=recon_warnings,
+            recon_time=recon_time,
+            now=time.time(),
+        )
+
     @app.route("/api/logs")
     @login_required
     def api_logs():

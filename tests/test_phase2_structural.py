@@ -68,7 +68,7 @@ class MockExecutor:
 # Test 1: Backward-compatible imports from trade_lifecycle
 # =============================================================================
 
-print("\n=== Test 1: Backward-compatible imports ===")
+print("\n=== Test 1: Core imports from trade_lifecycle ===")
 
 from trade_lifecycle import (
     TradeState,
@@ -76,7 +76,6 @@ from trade_lifecycle import (
     TradeLifecycle,
     RFQParams,
     ExitCondition,
-    LifecycleManager,
 )
 
 check("TradeState importable from trade_lifecycle", TradeState is not None)
@@ -84,16 +83,8 @@ check("TradeLeg importable from trade_lifecycle", TradeLeg is not None)
 check("TradeLifecycle importable from trade_lifecycle", TradeLifecycle is not None)
 check("RFQParams importable from trade_lifecycle", RFQParams is not None)
 check("ExitCondition importable from trade_lifecycle", ExitCondition is not None)
-check("LifecycleManager importable from trade_lifecycle", LifecycleManager is not None)
 
-# LifecycleManager should actually be LifecycleEngine aliased
 from lifecycle_engine import LifecycleEngine
-
-check(
-    "LifecycleManager is LifecycleEngine",
-    LifecycleManager is LifecycleEngine,
-    f"LifecycleManager.__name__={LifecycleManager.__name__}",
-)
 
 
 # =============================================================================
@@ -120,36 +111,30 @@ print("\n=== Test 3: ExecutionRouter construction ===")
 mock = MockExecutor()
 om = OrderManager(mock)
 
-# Minimal mocks for RFQ and Smart executors
+# Minimal mock for RFQ executor
 class FakeRFQExecutor:
-    pass
-
-class FakeSmartExecutor:
     pass
 
 router = ExecutionRouter(
     executor=mock,
     rfq_executor=FakeRFQExecutor(),
-    smart_executor=FakeSmartExecutor(),
     order_manager=om,
     rfq_notional_threshold=50000.0,
-    smart_notional_threshold=10000.0,
 )
 
 check("ExecutionRouter constructs with all deps", router is not None)
 check("ExecutionRouter has open method", hasattr(router, 'open'))
 check("ExecutionRouter has close method", hasattr(router, 'close'))
 check("rfq_notional_threshold set", router.rfq_notional_threshold == 50000.0)
-check("smart_notional_threshold set", router.smart_notional_threshold == 10000.0)
 
 
 # =============================================================================
-# Test 4: LifecycleEngine has all LifecycleManager methods
+# Test 4: LifecycleEngine API surface
 # =============================================================================
 
 print("\n=== Test 4: LifecycleEngine API surface ===")
 
-# Check that LifecycleEngine has all the methods that LifecycleManager had
+# Check that LifecycleEngine has all the expected methods
 expected_methods = [
     'create', 'open', 'close', 'tick',
     'force_close', 'kill_all', 'cancel',
@@ -196,7 +181,6 @@ om2 = OrderManager(mock2)
 router2 = ExecutionRouter(
     executor=mock2,
     rfq_executor=FakeRFQExecutor(),
-    smart_executor=FakeSmartExecutor(),
     order_manager=om2,
 )
 
@@ -240,7 +224,6 @@ om3 = OrderManager(mock3)
 router3 = ExecutionRouter(
     executor=mock3,
     rfq_executor=FakeRFQExecutor(),
-    smart_executor=FakeSmartExecutor(),
     order_manager=om3,
 )
 
@@ -280,7 +263,6 @@ om4 = OrderManager(mock4)
 router4 = ExecutionRouter(
     executor=mock4,
     rfq_executor=FakeRFQExecutor(),
-    smart_executor=FakeSmartExecutor(),
     order_manager=om4,
 )
 
@@ -291,7 +273,7 @@ check("error mentions max attempts", "10 attempts" in (breaker_trade.error or ""
 
 
 # =============================================================================
-# Test 8: trade_lifecycle.py contains NO LifecycleManager class definition
+# Test 8: trade_lifecycle.py is data-only
 # =============================================================================
 
 print("\n=== Test 8: trade_lifecycle.py is data-only ===")
@@ -305,11 +287,6 @@ tl_classes = [
     if obj.__module__ == "trade_lifecycle"
 ]
 
-check(
-    "trade_lifecycle has no LifecycleManager class definition",
-    "LifecycleManager" not in tl_classes,
-    f"defined classes: {tl_classes}",
-)
 check(
     "TradeState defined in trade_lifecycle",
     "TradeState" in tl_classes,

@@ -575,6 +575,16 @@ class LimitFillManager:
                 logger.error(f"LimitFillManager: no price for {ls.symbol} on requote")
                 continue
 
+            # Skip requote if price hasn't changed — avoids unnecessary cancel+replace API calls
+            if self._order_manager:
+                current_record = self._order_manager._orders.get(ls.order_id)
+                if current_record and abs(current_record.price - price) < 0.01:
+                    logger.info(
+                        f"LimitFillManager: skipping requote for {ls.symbol} — "
+                        f"price unchanged @ ${price}"
+                    )
+                    continue
+
             if self._order_manager:
                 # Use OrderManager's atomic requote (cancel + replace + chain)
                 try:

@@ -25,11 +25,10 @@ import os
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-from account_manager import AccountSnapshot, PositionSnapshot
+from account_manager import AccountManager, AccountSnapshot, PositionSnapshot
 from trade_execution import TradeExecutor, LimitFillManager, ExecutionParams
 from rfq import RFQExecutor
-from multileg_orderbook import SmartOrderbookExecutor, SmartExecConfig
-from order_manager import OrderManager, OrderPurpose
+from order_manager import OrderManager, OrderPurpose, OrderStatus
 from execution_router import ExecutionRouter
 from trade_lifecycle import (
     ExitCondition,
@@ -45,10 +44,6 @@ logger = logging.getLogger(__name__)
 class LifecycleEngine:
     """
     Orchestrates one or more TradeLifecycles through their state machines.
-
-    Renamed from LifecycleManager for clarity — this is the engine that
-    drives state transitions, not just a container.  The old name is
-    available as an alias in trade_lifecycle.py for backward compatibility.
 
     Usage:
         engine = LifecycleEngine()
@@ -69,29 +64,32 @@ class LifecycleEngine:
         # From here, tick() handles everything
     """
 
+    # Reconciliation runs every N ticks (~50s at 10s poll interval)
+    RECONCILE_EVERY_N_TICKS: int = 5
+
     def __init__(
         self,
         rfq_notional_threshold: float = 50000.0,
-        smart_notional_threshold: float = 10000.0,
+        account_manager: Optional[AccountManager] = None,
     ):
         self._trades: Dict[str, TradeLifecycle] = {}
         self._executor = TradeExecutor()
         self._rfq_executor = RFQExecutor()
-        self._smart_executor = SmartOrderbookExecutor()
         self._order_manager = OrderManager(self._executor)
+        self._account_manager = account_manager
+        self._tick_counter: int = 0
+        self._last_reconciliation_warnings: List[str] = []
+        self._last_reconciliation_time: Optional[float] = None
+        self._notifier = None  # lazy-loaded TelegramNotifier
 
         self._router = ExecutionRouter(
             executor=self._executor,
             rfq_executor=self._rfq_executor,
-            smart_executor=self._smart_executor,
             order_manager=self._order_manager,
             rfq_notional_threshold=rfq_notional_threshold,
-            smart_notional_threshold=smart_notional_threshold,
         )
 
-        # Expose thresholds for backward compatibility
         self.rfq_notional_threshold = rfq_notional_threshold
-        self.smart_notional_threshold = smart_notional_threshold
 
     @property
     def order_manager(self) -> OrderManager:
@@ -137,7 +135,6 @@ class LifecycleEngine:
         exit_conditions: Optional[List[ExitCondition]] = None,
         execution_mode: Optional[str] = None,
         rfq_action: str = "buy",
-        smart_config: Optional[SmartExecConfig] = None,
         execution_params: Optional[ExecutionParams] = None,
         rfq_params: Optional[RFQParams] = None,
         strategy_id: Optional[str] = None,
@@ -150,7 +147,6 @@ class LifecycleEngine:
             exit_conditions=exit_conditions or [],
             execution_mode=execution_mode,
             rfq_action=rfq_action,
-            smart_config=smart_config,
             execution_params=execution_params,
             rfq_params=rfq_params,
             metadata=metadata or {},
@@ -341,6 +337,12 @@ class LifecycleEngine:
             except Exception as e:
                 logger.error(f"Trade {trade.id}: tick error in state {trade.state.value}: {e}")
 
+        # Periodic reconciliation against exchange open-orders
+        self._tick_counter += 1
+        if (self._account_manager
+                and self._tick_counter % self.RECONCILE_EVERY_N_TICKS == 0):
+            self._run_reconciliation()
+
         # Persist trade state snapshot after processing
         if self._trades:
             self._persist_all_trades()
@@ -461,6 +463,84 @@ class LifecycleEngine:
         trade.error = "Cancelled by user"
         logger.info(f"Trade {trade.id}: cancelled (no fills)")
         return True
+
+    # ── Reconciliation ────────────────────────────────────────────────────
+
+    def _get_notifier(self):
+        """Lazy-load TelegramNotifier to avoid circular imports."""
+        if self._notifier is None:
+            try:
+                from telegram_notifier import get_notifier
+                self._notifier = get_notifier()
+            except Exception:
+                self._notifier = None
+        return self._notifier
+
+    def _run_reconciliation(self) -> None:
+        """
+        Periodic reconciliation against exchange open-orders endpoint.
+
+        Detects:
+          - Stale ledger entries (ledger says live, exchange says gone) → poll to fix
+          - Orphan orders (on exchange but not in ledger) → auto-cancel + alert
+        """
+        try:
+            exchange_orders = self._account_manager.get_open_orders(force_refresh=True)
+        except Exception as e:
+            logger.warning(f"Reconciliation: failed to fetch exchange open orders: {e}")
+            return
+
+        warnings = self._order_manager.reconcile(exchange_orders)
+        self._last_reconciliation_time = time.time()
+        self._last_reconciliation_warnings = warnings
+
+        if not warnings:
+            logger.debug("Reconciliation: ledger and exchange in sync")
+            return
+
+        logger.warning(f"Reconciliation: {len(warnings)} issue(s) found")
+
+        # Handle stale ledger entries — poll them to discover true state
+        stale_warnings = [w for w in warnings if "not found on exchange" in w]
+        for w in stale_warnings:
+            # Extract order_id from warning: "Ledger order {id} ..."
+            parts = w.split()
+            if len(parts) >= 3:
+                stale_id = parts[2]
+                if stale_id in self._order_manager._orders:
+                    self._order_manager.poll_order(stale_id)
+
+        # Handle orphan orders — auto-cancel + notify
+        orphan_warnings = [w for w in warnings if "Orphan order" in w]
+        orphan_ids = []
+        for w in orphan_warnings:
+            parts = w.split()
+            if len(parts) >= 3:
+                orphan_id = parts[2]
+                orphan_ids.append(orphan_id)
+                try:
+                    self._executor.cancel_order(orphan_id)
+                    logger.warning(f"Reconciliation: auto-cancelled orphan order {orphan_id}")
+                except Exception as e:
+                    logger.error(f"Reconciliation: failed to cancel orphan {orphan_id}: {e}")
+
+        # Telegram alerts
+        notifier = self._get_notifier()
+        if notifier:
+            if orphan_ids:
+                notifier.notify_orphan_detected(orphan_ids, "auto-cancelled")
+            if stale_warnings:
+                notifier.notify_reconciliation_warning(stale_warnings)
+
+    @property
+    def last_reconciliation_warnings(self) -> List[str]:
+        """Most recent reconciliation warnings (empty if clean)."""
+        return self._last_reconciliation_warnings
+
+    @property
+    def last_reconciliation_time(self) -> Optional[float]:
+        """Timestamp of the last reconciliation run."""
+        return self._last_reconciliation_time
 
     # ── Persistence ──────────────────────────────────────────────────────
 

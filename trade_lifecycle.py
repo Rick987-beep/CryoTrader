@@ -13,8 +13,6 @@ The state machine that drives trades through these states lives in
 lifecycle_engine.py (LifecycleEngine).  Execution routing lives in
 execution_router.py (ExecutionRouter).
 
-For backward compatibility, LifecycleManager is re-exported as an alias
-for LifecycleEngine at the bottom of this file.
 """
 
 import json
@@ -27,7 +25,6 @@ from typing import Any, Callable, Dict, List, Optional
 
 from account_manager import AccountSnapshot, PositionSnapshot
 from trade_execution import ExecutionParams, ExecutionPhase
-from multileg_orderbook import SmartExecConfig
 from market_data import get_option_orderbook
 logger = logging.getLogger(__name__)
 
@@ -62,7 +59,6 @@ class RFQParams:
             0.0 = require beating the book; -999 = accept anything (default).
         fallback_mode: Execution mode to try if RFQ fails:
             "limit" → fall back to per-leg limit orders.
-            "smart" → fall back to smart orderbook execution.
             None    → no fallback, mark trade FAILED.
     """
     timeout_seconds: float = 60.0
@@ -129,9 +125,8 @@ class TradeLifecycle:
         open_legs:        Legs for opening the position
         close_legs:       Legs for closing (auto-generated as reverse of open)
         exit_conditions:  List of callables; if ANY returns True, trigger close
-        execution_mode:   "limit", "rfq", "smart", or None (auto-route)
+        execution_mode:   "limit", "rfq", or None (auto-route)
         rfq_action:       "buy" or "sell" — passed to RFQExecutor.execute()
-        smart_config:     SmartExecConfig for "smart" mode execution
         created_at:       Unix timestamp of creation
         opened_at:        Unix timestamp when all open legs filled
         closed_at:        Unix timestamp when all close legs filled
@@ -146,9 +141,8 @@ class TradeLifecycle:
     open_legs: List[TradeLeg] = field(default_factory=list)
     close_legs: List[TradeLeg] = field(default_factory=list)
     exit_conditions: List[ExitCondition] = field(default_factory=list)
-    execution_mode: Optional[str] = None  # "limit", "rfq", "smart", or None (auto-route)
+    execution_mode: Optional[str] = None  # "limit", "rfq", or None (auto-route)
     rfq_action: str = "buy"             # "buy" or "sell" — for the open
-    smart_config: Optional[SmartExecConfig] = None  # Config for "smart" mode
     execution_params: Optional[ExecutionParams] = None  # Config for "limit" mode phases/timeouts
     rfq_params: Optional[RFQParams] = None  # Config for "rfq" mode timing/improvement
     created_at: float = field(default_factory=time.time)
@@ -344,7 +338,7 @@ class TradeLifecycle:
         """Serialize trade state for crash-recovery persistence.
 
         Excludes non-serializable fields (exit_conditions, rfq_result,
-        smart_config, execution_params, rfq_params, metadata internals).
+        execution_params, rfq_params, metadata internals).
         Those are re-attached from the strategy config on recovery.
         """
         return {
@@ -427,28 +421,11 @@ class TradeLifecycle:
         )
 
 
-# =============================================================================
-# Backward Compatibility
-# =============================================================================
-# The state machine was extracted to lifecycle_engine.py (class LifecycleEngine).
-# This lazy re-export keeps all existing `from trade_lifecycle import LifecycleManager`
-# imports working without circular import issues.
-
-
-def __getattr__(name):
-    if name == "LifecycleManager":
-        from lifecycle_engine import LifecycleEngine
-        globals()["LifecycleManager"] = LifecycleEngine
-        return LifecycleEngine
-    raise AttributeError(f"module 'trade_lifecycle' has no attribute {name!r}")
-
-
 __all__ = [
     "TradeState",
     "RFQParams",
     "TradeLeg",
     "ExitCondition",
     "TradeLifecycle",
-    "LifecycleManager",  # backward compat alias for LifecycleEngine
 ]
 

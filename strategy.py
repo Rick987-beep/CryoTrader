@@ -55,14 +55,13 @@ from account_manager import AccountManager, AccountSnapshot, PositionMonitor
 from auth import CoincallAuth
 from config import API_KEY, API_SECRET, BASE_URL
 from market_data import MarketData
-from multileg_orderbook import SmartExecConfig, SmartOrderbookExecutor
 from option_selection import LegSpec, resolve_legs
 from rfq import RFQExecutor
 from trade_execution import TradeExecutor
 from trade_execution import ExecutionParams, ExecutionPhase
+from lifecycle_engine import LifecycleEngine
 from trade_lifecycle import (
     ExitCondition,
-    LifecycleManager,
     RFQParams,
     TradeLifecycle,
     TradeState,
@@ -88,17 +87,15 @@ class TradingContext:
     market_data: MarketData
     executor: TradeExecutor
     rfq_executor: RFQExecutor
-    smart_executor: SmartOrderbookExecutor
     account_manager: AccountManager
     position_monitor: PositionMonitor
-    lifecycle_manager: LifecycleManager
+    lifecycle_manager: LifecycleEngine
     persistence: Optional[Any] = None  # TradeStatePersistence (optional)
 
 
 def build_context(
     poll_interval: int = 10,
     rfq_notional_threshold: float = 50000.0,
-    smart_notional_threshold: float = 10000.0,
 ) -> TradingContext:
     """
     Construct a fully-wired TradingContext from config.py settings.
@@ -111,13 +108,10 @@ def build_context(
     executor = TradeExecutor()
     rfq_executor = RFQExecutor()
     account_mgr = AccountManager()
-    smart_executor = SmartOrderbookExecutor(
-        get_positions=lambda: account_mgr.get_positions(force_refresh=True),
-    )
     monitor = PositionMonitor(poll_interval=poll_interval)
-    lifecycle_mgr = LifecycleManager(
+    lifecycle_mgr = LifecycleEngine(
         rfq_notional_threshold=rfq_notional_threshold,
-        smart_notional_threshold=smart_notional_threshold,
+        account_manager=account_mgr,
     )
 
     # Wire lifecycle ticks to position monitor
@@ -128,7 +122,6 @@ def build_context(
         market_data=market_data_svc,
         executor=executor,
         rfq_executor=rfq_executor,
-        smart_executor=smart_executor,
         account_manager=account_mgr,
         position_monitor=monitor,
         lifecycle_manager=lifecycle_mgr,
@@ -521,8 +514,7 @@ class StrategyConfig:
         legs: LegSpec templates — resolved to concrete symbols at trade time
         entry_conditions: Callables that must ALL return True to open a trade
         exit_conditions: Callables — ANY returning True triggers a close
-        execution_mode: "limit", "rfq", "smart", or "auto" (notional-based routing)
-        smart_config: Optional SmartExecConfig for "smart" mode
+        execution_mode: "limit", "rfq", or "auto" (notional-based routing)
         execution_params: Optional ExecutionParams for "limit" mode (phased pricing, timeouts)
         rfq_params: Optional RFQParams for "rfq" mode (timeout, improvement, fallback)
         rfq_action: "buy" or "sell" — what to do on open (close is the reverse)
@@ -536,7 +528,6 @@ class StrategyConfig:
     entry_conditions: List[EntryCondition] = field(default_factory=list)
     exit_conditions: List[ExitCondition] = field(default_factory=list)
     execution_mode: str = "auto"
-    smart_config: Optional[SmartExecConfig] = None
     execution_params: Optional[ExecutionParams] = None
     rfq_params: Optional[RFQParams] = None
     rfq_action: str = "buy"
@@ -556,7 +547,7 @@ class StrategyConfig:
 class StrategyRunner:
     """
     Executes a single strategy: evaluates entry conditions, resolves legs,
-    creates trades, and lets the LifecycleManager handle execution and exits.
+    creates trades, and lets the LifecycleEngine handle execution and exits.
 
     Register with the PositionMonitor to receive periodic ticks:
 
@@ -598,6 +589,20 @@ class StrategyRunner:
     def all_trades(self) -> List[TradeLifecycle]:
         """All trades (any state) belonging to this strategy."""
         return self.ctx.lifecycle_manager.get_trades_for_strategy(self._strategy_id)
+
+    @property
+    def is_done(self) -> bool:
+        """True when this runner has exhausted its daily quota and has no active trades."""
+        if self.active_trades:
+            return False
+        if self.config.max_trades_per_day <= 0:
+            return False  # unlimited — never "done"
+        today = datetime.now(timezone.utc).date()
+        today_count = sum(
+            1 for t in self.all_trades
+            if datetime.fromtimestamp(t.created_at, tz=timezone.utc).date() == today
+        )
+        return today_count >= self.config.max_trades_per_day
 
     # -- Tick -----------------------------------------------------------------
 
@@ -711,7 +716,6 @@ class StrategyRunner:
                 exit_conditions=list(self.config.exit_conditions),
                 execution_mode=exec_mode,
                 rfq_action=self.config.rfq_action,
-                smart_config=self.config.smart_config,
                 execution_params=self.config.execution_params,
                 rfq_params=self.config.rfq_params,
                 strategy_id=self._strategy_id,

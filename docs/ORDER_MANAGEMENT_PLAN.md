@@ -1,7 +1,7 @@
 # Order Management Refactoring Plan
 
 **Created:** 2026-03-06
-**Status:** Planning — not yet implemented
+**Status:** ✅ Implemented in v1.0.0 (see CHANGELOG.md)
 **Trigger:** 2026-03-05 production incident — runaway close orders built up a huge position
 
 ---

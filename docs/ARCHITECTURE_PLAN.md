@@ -22,10 +22,10 @@ This document outlines the transformation of CoincallTrader from a simple option
 - ✅ **Order execution** — Limit orders with phased pricing (mark → mid → aggressive) via `ExecutionPhase` / `ExecutionParams`; `LimitFillManager` routes through `OrderManager` when present (`trade_execution.py`)
 - ✅ **Order management** — Central order ledger preventing duplicate orders, idempotent placement, supersession chains, JSONL audit log, JSON snapshots, `reconcile()` against exchange state (`order_manager.py`)
 - ✅ **RFQ execution** — Block trades for $50k+ notional multi-leg structures with orderbook comparison (`rfq.py`)
-- ✅ **Smart orderbook execution** — Chunked quoting with aggressive fallback (`multileg_orderbook.py`)
+- ✅ **Smart orderbook execution** — Chunked quoting with aggressive fallback (`multileg_orderbook.py`). Standalone module — not integrated into ExecutionRouter.
 - ✅ **Trade lifecycle (data)** — `TradeState`, `TradeLeg`, `TradeLifecycle`, `RFQParams`, `ExitCondition` dataclasses and PnL helpers (`trade_lifecycle.py`)
 - ✅ **Lifecycle engine** — State machine (PENDING_OPEN → OPENING → OPEN → PENDING_CLOSE → CLOSING → CLOSED/FAILED), tick-driven advancement, `LifecycleEngine` class (`lifecycle_engine.py`)
-- ✅ **Execution router** — Routes open/close to correct executor (limit, rfq, smart) with mode auto-detection by notional, close circuit breaker (10 attempts), reduce_only enforcement (`execution_router.py`)
+- ✅ **Execution router** — Routes open/close to correct executor (limit, rfq) with mode auto-detection by notional, close circuit breaker (10 attempts), reduce_only enforcement (`execution_router.py`)
 - ✅ **Exit conditions** — `profit_target`, `max_loss`, `max_hold_hours`, `time_exit`, `utc_datetime_exit`, `account_delta_limit`, `structure_delta_limit`, `leg_greek_limit` (`trade_lifecycle.py`, `strategy.py`)
 - ✅ **Position monitoring** — Background polling, `AccountSnapshot`/`PositionSnapshot`, live Greeks (`account_manager.py`)
 - ✅ **Strategy framework** — `TradingContext` DI, `StrategyConfig`, `StrategyRunner`, 7 entry condition factories, dry-run mode (`strategy.py`)
@@ -99,13 +99,13 @@ CoincallTrader/
 │   ├── _account.html       # Account metrics fragment
 │   ├── _strategies.html    # Strategy cards with controls
 │   ├── _positions.html     # Positions table fragment
+│   ├── _orders.html        # Active orders table fragment
 │   └── _logs.html          # Log tail fragment
 ├── strategies/
 │   ├── __init__.py
 │   ├── blueprint_strangle.py  # Blueprint strategy — starting template for traders
 │   ├── atm_straddle.py        # Daily ATM straddle with profit target + time exit
-│   ├── long_strangle_pnl_test.py  # Long strangle PnL monitoring test
-│   └── reverse_iron_condor_live.py  # Reverse iron condor live trading
+│   └── test_strangle_11mar.py  # Test strangle (11 Mar live test)
 ├── requirements.txt
 ├── .env                    # API keys + dashboard password (gitignored)
 ├── docs/
@@ -113,19 +113,19 @@ CoincallTrader/
 │   ├── API_REFERENCE.md
 │   └── MODULE_REFERENCE.md
 ├── tests/
-│   ├── test_order_manager.py        # 85/85 OrderManager unit tests
-│   ├── test_phase2_structural.py    # 71/71 structural split + integration tests
-│   ├── test_strategy_framework.py   # 72/72 unit assertions
+│   ├── test_order_manager.py        # 85 OrderManager unit tests
+│   ├── test_phase2_structural.py    # 67 structural split + integration tests
+│   ├── test_phase3_hardening.py     # 21 Phase 3 hardening tests (reconciliation, Telegram, dashboard)
+│   ├── test_strategy_framework.py   # 72 unit assertions
 │   ├── test_strategy_layer.py       # 50 strategy layer assertions
-│   ├── test_atm_straddle.py         # 34/34 ATM straddle strategy unit tests
-│   ├── test_execution_timing.py     # 40/40 ExecutionPhase, RFQParams, phased execution
-│   ├── test_dashboard.py            # Standalone dashboard test with mock data
-│   └── test_complex_option_selection.py  # 32/32 compound selection assertions
+│   ├── test_atm_straddle.py         # 34 ATM straddle strategy unit tests
+│   ├── test_execution_timing.py     # 40 ExecutionPhase, RFQParams, phased execution
+│   └── test_dashboard.py            # Standalone dashboard test with mock data
 ├── logs/                   # Runtime logs + order audit (gitignored)
 └── archive/                # Legacy code (gitignored)
 ```
 
-**Current size:** 19 Python modules + 6 HTML templates, ~9,000 lines total
+**Current size:** 19 Python modules + 7 HTML templates, ~9,000 lines total
 
 ### Future additions (when needed)
 - `persistence/` — SQLite state storage and crash recovery
@@ -140,7 +140,7 @@ CoincallTrader/
 | Requirement | Priority | Description |
 |-------------|----------|-------------|
 | REQ-TL-01 | ✅ **Done** | Dynamic instrument selection based on criteria (expiry, strike, delta) — `LegSpec` + `resolve_legs()` + compound `find_option()` |
-| REQ-TL-02 | ✅ **Done** | Order placement with execution mode selection (limit, RFQ, smart) — 3 modes in `LifecycleManager` |
+| REQ-TL-02 | ✅ **Done** | Order placement with execution mode selection (limit, RFQ) — 2 modes in `LifecycleEngine` via `ExecutionRouter` |
 | REQ-TL-03 | ✅ **Done** | RFQ execution for multi-leg options trades |
 | REQ-TL-04 | ✅ **Done** | Position tracking: link orders → fills → positions |
 | REQ-TL-05 | ✅ **Done** | Conditional exit logic (profit targets, stop losses, time decay) |
@@ -338,10 +338,9 @@ Factory functions provided for common patterns:
    - Algorithm would think nothing filled and loop indefinitely
    - Fix enabled both opens (0→0.1) and closes (0.2→0.1) to be tracked correctly
 
-**Integration with LifecycleManager:**
-- Opening trades: Uses `LifecycleManager.create()` with `execution_mode="smart"` and `smart_config`
-- Closing trades: Currently direct call to `SmartOrderbookExecutor.execute_smart_multi_leg()` 
-  - LifecycleManager doesn't yet support smart close mode (future enhancement)
+**Integration Status:**
+- `SmartOrderbookExecutor` is a standalone module. It is **not** integrated into `ExecutionRouter` — the router only supports `limit` and `rfq` modes.
+- To use smart execution, call `SmartOrderbookExecutor.execute_smart_multi_leg()` directly.
 
 **Testing Results:**
 - ✅ Butterfly spread (3 legs, different quantities: 0.2/0.4/0.2)
@@ -391,7 +390,7 @@ smart_config = SmartExecConfig(
 **Core Classes:**
 - `TradingContext` — Dependency injection container holding every service (auth, market data, executor, RFQ, smart executor, account manager, position monitor, lifecycle manager). Strategies and tests receive this instead of importing globals.
 - `StrategyConfig` — Declarative strategy definition: legs (`LegSpec` list), entry conditions, exit conditions, execution mode, concurrency limits, cooldown, and dry-run flag.
-- `StrategyRunner` — Tick-driven executor: checks entry conditions, resolves `LegSpec`s to concrete symbols via `resolve_legs()`, creates trade lifecycles, delegates to `LifecycleManager`.
+- `StrategyRunner` — Tick-driven executor: checks entry conditions, resolves `LegSpec`s to concrete symbols via `resolve_legs()`, creates trade lifecycles, delegates to `LifecycleEngine`.
 - `build_context()` — Factory function that wires all services from `config.py` settings.
 
 **Entry Condition Factories:**
@@ -412,7 +411,7 @@ smart_config = SmartExecConfig(
 **Modified Module:** `trade_lifecycle.py` — Added:
 - `strategy_id` field on `TradeLifecycle` for per-strategy tracking
 - `_get_orderbook_price()` helper for live pricing
-- `get_trades_for_strategy()` and `active_trades_for_strategy()` on `LifecycleManager`
+- `get_trades_for_strategy()` and `active_trades_for_strategy()` on `LifecycleEngine`
 
 **Modified Module:** `trade_execution.py` — Fixed:
 - `get_order_status()` endpoint: `/open/option/order/singleQuery/v1?orderId={id}`
@@ -590,7 +589,7 @@ Chose **Flask + htmx** over FastAPI — simpler, no async rewrite, single `<scri
 
 **Done:**
 - ✅ `TradeLifecycle.to_dict()/from_dict()` serialization — full round-trip for all trade fields
-- ✅ `LifecycleManager.restore_trade()` — re-inject recovered trades into active tracking
+- ✅ `LifecycleEngine.restore_trade()` — re-inject recovered trades into active tracking
 - ✅ `_persist_all_trades()` — writes `logs/trades_snapshot.json` on every tick
 - ✅ `_recover_trades()` in `main.py` — loads snapshot, verifies exchange positions, normalizes states
 - ✅ Order ledger persistence via `OrderManager` — `active_orders.json` snapshot + JSONL audit
@@ -623,8 +622,8 @@ See [ORDER_MANAGEMENT_PLAN.md](ORDER_MANAGEMENT_PLAN.md) for the original design
 **Phase 2 — Structural Split:**
 - `trade_lifecycle.py` trimmed to ~450 lines (data-only): `TradeState`, `TradeLeg`, `TradeLifecycle`, `RFQParams`, `ExitCondition`, PnL helpers
 - `lifecycle_engine.py` (~500 lines): `LifecycleEngine` class — state machine, tick advancement, creates/owns `ExecutionRouter` + `OrderManager`
-- `execution_router.py` (~400 lines): `ExecutionRouter` class — routes open/close to limit/rfq/smart executor, mode auto-detection, close circuit breaker
-- Backward compatibility: `from trade_lifecycle import LifecycleManager` → `LifecycleEngine` via `__getattr__` lazy re-export
+- `execution_router.py` (~400 lines): `ExecutionRouter` class — routes open/close to limit/rfq executor, mode auto-detection, close circuit breaker
+- Backward compatibility alias (`LifecycleManager`) removed in post-release cleanup — use `from lifecycle_engine import LifecycleEngine` directly
 - `position_closer.py` — added `order_manager.cancel_all()` after `kill_all()` for belt-and-suspenders
 - `main.py` crash recovery — Step 1: load order ledger + poll; Step 3: reconcile against exchange
 

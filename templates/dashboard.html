@@ -156,6 +156,15 @@
       </div>
     </div>
 
+    <!-- Orders -->
+    <div class="panel full">
+      <h2>Order Ledger</h2>
+      <div id="orders"
+           hx-get="/api/orders" hx-trigger="load, every 5s" hx-swap="innerHTML">
+        <p class="muted">Loading...</p>
+      </div>
+    </div>
+
     <!-- Log Tail -->
     <div class="panel full">
       <h2>Recent Logs</h2>

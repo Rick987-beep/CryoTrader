@@ -26,8 +26,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from datetime import datetime, timezone
 
 from account_manager import AccountSnapshot, PositionSnapshot
+from lifecycle_engine import LifecycleEngine
 from trade_lifecycle import (
-    LifecycleManager, TradeLifecycle, TradeLeg, TradeState,
+    TradeLifecycle, TradeLeg, TradeState,
 )
 from option_selection import LegSpec, straddle, strangle
 from strategy import (

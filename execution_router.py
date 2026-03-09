@@ -2,14 +2,13 @@
 """
 Execution Router
 
-Extracted from LifecycleManager — routes trade open/close to the correct
-executor based on execution_mode (limit, rfq, smart, or auto-detected).
+Extracted from LifecycleEngine — routes trade open/close to the correct
+executor based on execution_mode (limit, rfq, or auto-detected).
 
 This module is the bridge between the lifecycle state machine and the
 concrete execution backends:
   - "limit"  → LimitFillManager (per-leg limit orders)
   - "rfq"    → RFQExecutor (atomic multi-leg)
-  - "smart"  → SmartOrderbookExecutor (chunked multi-leg)
 """
 
 import logging
@@ -18,7 +17,6 @@ from typing import List, Optional
 
 from trade_execution import TradeExecutor, LimitFillManager, ExecutionParams
 from rfq import RFQExecutor, OptionLeg, RFQResult
-from multileg_orderbook import SmartOrderbookExecutor, SmartExecConfig
 from market_data import get_option_orderbook
 from order_manager import OrderManager, OrderPurpose
 
@@ -43,17 +41,13 @@ class ExecutionRouter:
         self,
         executor: TradeExecutor,
         rfq_executor: RFQExecutor,
-        smart_executor: SmartOrderbookExecutor,
         order_manager: OrderManager,
         rfq_notional_threshold: float = 50000.0,
-        smart_notional_threshold: float = 10000.0,
     ):
         self._executor = executor
         self._rfq_executor = rfq_executor
-        self._smart_executor = smart_executor
         self._order_manager = order_manager
         self.rfq_notional_threshold = rfq_notional_threshold
-        self.smart_notional_threshold = smart_notional_threshold
 
     # ── Open ─────────────────────────────────────────────────────────────
 
@@ -73,8 +67,6 @@ class ExecutionRouter:
 
         if trade.execution_mode == "rfq":
             return self._open_rfq(trade)
-        elif trade.execution_mode == "smart":
-            return self._open_smart(trade)
         else:
             return self._open_limit(trade)
 
@@ -109,8 +101,7 @@ class ExecutionRouter:
         Logic:
           - Single leg → "limit"
           - Multi-leg, notional >= rfq_threshold → "rfq"
-          - Multi-leg, smart_threshold <= notional < rfq_threshold → "smart"
-          - Multi-leg, notional < smart_threshold → "limit" (fallback)
+          - Multi-leg, notional < rfq_threshold → "limit"
         """
         if len(trade.open_legs) == 1:
             logger.info(f"[{trade.id}] Single leg detected, using 'limit' mode")
@@ -122,11 +113,8 @@ class ExecutionRouter:
         if notional >= self.rfq_notional_threshold:
             logger.info(f"[{trade.id}] Notional >= ${self.rfq_notional_threshold:,.0f}, using 'rfq' mode")
             return "rfq"
-        elif notional >= self.smart_notional_threshold:
-            logger.info(f"[{trade.id}] ${self.smart_notional_threshold:,.0f} <= notional < ${self.rfq_notional_threshold:,.0f}, using 'smart' mode")
-            return "smart"
         else:
-            logger.info(f"[{trade.id}] Notional < ${self.smart_notional_threshold:,.0f}, using 'limit' mode (fallback)")
+            logger.info(f"[{trade.id}] Notional < ${self.rfq_notional_threshold:,.0f}, using 'limit' mode")
             return "limit"
 
     def _calculate_notional(self, legs: List[TradeLeg]) -> float:
@@ -189,10 +177,7 @@ class ExecutionRouter:
                 f"— falling back to '{fallback}'"
             )
             trade.execution_mode = fallback
-            if fallback == "smart":
-                return self._open_smart(trade)
-            else:
-                return self._open_limit(trade)
+            return self._open_limit(trade)
 
         trade.state = TradeState.FAILED
         trade.error = result.message
@@ -220,41 +205,6 @@ class ExecutionRouter:
         trade.metadata["_open_fill_mgr"] = mgr
         logger.info(f"Trade {trade.id}: all {len(trade.open_legs)} open orders placed via LimitFillManager")
         return True
-
-    def _open_smart(self, trade: TradeLifecycle) -> bool:
-        """Open via smart multi-leg orderbook execution with chunking."""
-        if not trade.smart_config:
-            trade.state = TradeState.FAILED
-            trade.error = "smart_config required for 'smart' execution mode"
-            logger.error(f"Trade {trade.id}: {trade.error}")
-            return False
-
-        trade.state = TradeState.OPENING
-
-        try:
-            logger.info(f"Trade {trade.id}: starting smart execution with {trade.smart_config.chunk_count} chunks")
-            result = self._smart_executor.execute_smart_multi_leg(
-                legs=trade.open_legs,
-                config=trade.smart_config,
-            )
-            if result.success:
-                for leg in trade.open_legs:
-                    if leg.symbol in result.total_filled_qty:
-                        leg.filled_qty = result.total_filled_qty[leg.symbol]
-                trade.state = TradeState.OPEN
-                trade.opened_at = time.time()
-                logger.info(f"Trade {trade.id}: smart execution completed successfully")
-                return True
-            else:
-                trade.state = TradeState.FAILED
-                trade.error = result.message
-                logger.error(f"Trade {trade.id}: smart execution failed: {result.message}")
-                return False
-        except Exception as e:
-            trade.state = TradeState.FAILED
-            trade.error = str(e)
-            logger.error(f"Trade {trade.id}: exception in smart execution: {e}")
-            return False
 
     # ── Close implementations ────────────────────────────────────────────
 

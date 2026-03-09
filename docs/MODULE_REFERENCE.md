@@ -83,9 +83,9 @@ ctx.position_monitor.start()
 ### Key Classes
 | Class | Purpose |
 |-------|---------|
-| `TradingContext` | DI container: auth, market_data, executor, rfq_executor, smart_executor, account_manager, position_monitor, lifecycle_manager, persistence (optional) |
+| `TradingContext` | DI container: auth, market_data, executor, rfq_executor, account_manager, position_monitor, lifecycle_manager, persistence (optional) |
 | `StrategyConfig` | Declarative definition: name, legs, entry/exit conditions, execution_mode, max_concurrent, max_trades_per_day, cooldown, execution_params, rfq_params, on_trade_opened, on_trade_closed |
-| `StrategyRunner` | Tick-driven executor: checks entries, resolves legs, creates trades, delegates to LifecycleManager. Exposes `stats` property. |
+| `StrategyRunner` | Tick-driven executor: checks entries, resolves legs, creates trades, delegates to LifecycleEngine. Exposes `stats` property. |
 
 ### Entry Condition Factories
 | Factory | Signature | Description |
@@ -186,8 +186,8 @@ Enriched option dict or `None`:
 3. `_check_closed_trades()` fires `on_trade_closed` for newly finished trades
 4. Entry conditions checked — all must return `True`
 5. `resolve_legs()` converts `LegSpec` list to concrete `TradeLeg` list
-6. `LifecycleManager.create()` creates trade with exit conditions
-7. `LifecycleManager.open()` begins execution
+6. `LifecycleEngine.create()` creates trade with exit conditions
+7. `LifecycleEngine.open()` begins execution
 8. Subsequent ticks advance lifecycle (fill checks, exit evaluations)
 9. `runner.stop()` for graceful shutdown
 9. `runner.stats` for win/loss/hold-time aggregates
@@ -208,7 +208,7 @@ The original monolithic `trade_lifecycle.py` was split into three focused module
 | `lifecycle_engine.py` | State machine: `LifecycleEngine` (ticks, state transitions, creates router + order manager) | ~500 |
 | `execution_router.py` | Routing: `ExecutionRouter` (dispatches open/close to limit/rfq/smart executor) | ~400 |
 
-**Backward compatibility:** `from trade_lifecycle import LifecycleManager` still works — it resolves to `LifecycleEngine` via a `__getattr__` lazy re-export.
+**Import path:** `from lifecycle_engine import LifecycleEngine`. The backward-compat `LifecycleManager` alias has been removed.
 
 ### Key Classes (trade_lifecycle.py)
 | Class | Purpose |
@@ -227,7 +227,7 @@ The original monolithic `trade_lifecycle.py` was split into three focused module
 ### Key Classes (execution_router.py)
 | Class | Purpose |
 |-------|---------|
-| `ExecutionRouter` | Routes open/close to correct executor. Mode auto-detection by notional: single-leg → limit, multi-leg ≥$50k → rfq, ≥$10k → smart, <$10k → limit fallback. Close circuit breaker (10 attempts → FAILED). All close orders enforce `reduce_only=True`. |
+| `ExecutionRouter` | Routes open/close to correct executor (limit or rfq). Mode auto-detection by notional: single-leg → limit, multi-leg ≥$50k → rfq, else limit fallback. Close circuit breaker (10 attempts → FAILED). All close orders enforce `reduce_only=True`. |
 
 ### Quick Start
 ```python
@@ -281,7 +281,7 @@ Every order placement and cancellation goes through `OrderManager`. It wraps `Tr
 - **Safety enforcement** — close/unwind orders always force `reduce_only=True`
 - **JSONL audit** — every state change appended to `logs/order_audit.jsonl`
 - **JSON snapshots** — `logs/active_orders.json` for crash recovery
-- **Exchange reconciliation** — `reconcile()` detects orphans and stale entries
+- **Exchange reconciliation** — `reconcile()` detects orphans and stale entries. Skips PENDING orders and orders placed within the last 30 seconds (grace period to avoid false positives on newly placed orders).
 
 ### Key Classes
 | Class | Purpose |
@@ -404,6 +404,8 @@ params = ExecutionParams(phases=[
 **Price pre-validation:** `place_all()` validates prices for ALL legs before placing ANY orders. If one leg has no orderbook liquidity, no orders are placed at all. This prevents the partial-placement race condition where one leg fills while the other's cancel arrives too late.
 
 **Circuit breaker:** `_close_limit()` tracks close attempts per trade. After 10 failed attempts, the trade transitions to `FAILED` with a critical log. This prevents infinite retry loops when market conditions make closing impossible.
+
+**Requote skip-if-unchanged:** `_requote_unfilled()` skips requoting when the new price is within $0.01 of the existing order price (tolerance check), avoiding wasteful cancel+replace cycles on stable markets. Logged at INFO level when skipped.
 
 ```python
 # Close orders are always reduce_only — set automatically by _close_limit()
@@ -650,23 +652,9 @@ if result.success:
 | `aggressive_wait_seconds` | 5.0 | Max wait per aggressive attempt |
 | `aggressive_retry_pause` | 1.0 | Pause between aggressive attempts |
 
-### Integration with LifecycleEngine
+### Integration Status
 
-**Opening trades:**
-```python
-from lifecycle_engine import LifecycleEngine
-
-engine = LifecycleEngine(...)
-trade = engine.create(
-    legs=legs,
-    execution_mode="smart",
-    smart_config=smart_config
-)
-engine.open(trade.id)
-```
-
-**Closing trades:**
-Currently requires direct SmartOrderbookExecutor call (LifecycleEngine smart close mode coming soon).
+`SmartOrderbookExecutor` is a standalone module. It is **not** integrated into `ExecutionRouter` — the router only supports `limit` and `rfq` modes. To use smart execution, call `SmartOrderbookExecutor.execute_smart_multi_leg()` directly.
 
 ### Use Cases
 
@@ -722,14 +710,11 @@ Fire-and-forget Telegram alerts via the Bot API.  If `TELEGRAM_BOT_TOKEN` is not
 | `notify_trade_closed(strategy, trade_id, pnl, roi, hold_min, cost)` | Trade enters CLOSED state |
 | `notify_daily_summary(equity, upnl, net_delta, positions)` | Once per day at 07:00 UTC (wall-clock gated) |
 | `notify_error(message)` | Consecutive failures in main loop |
-| `notify_strategy_paused(name)` | Strategy paused via dashboard |
-| `notify_strategy_resumed(name)` | Strategy resumed via dashboard |
-| `notify_strategy_stopped(name)` | Strategy stopped via dashboard |
 
 ### Integration
-- Created by `build_context()` in `strategy.py` and stored as `ctx.notifier`.
-- Called by `LifecycleManager` on trade open/close and by `HealthChecker` for the daily summary.
-- Dashboard kill switch also sends a Telegram alert.
+- Singleton access via `get_notifier()` — any module can import and call it without DI wiring.
+- **Strategy-level opt-in:** Each strategy decides what to notify and when. Infrastructure modules (lifecycle engine, dashboard, kill switch) stay silent.
+- Example: `strategies/atm_straddle.py` uses `on_trade_opened` and `on_trade_closed` callbacks to send Telegram alerts.
 
 ---
 
@@ -769,6 +754,7 @@ start_dashboard(ctx, runners, host="0.0.0.0", port=8080)
 | `/api/account` | GET | ✓ | htmx fragment: equity, margin, Greeks |
 | `/api/strategies` | GET | ✓ | htmx fragment: strategy cards with stats |
 | `/api/positions` | GET | ✓ | htmx fragment: open positions table |
+| `/api/orders` | GET | ✓ | htmx fragment: active orders from OrderManager ledger |
 | `/api/logs` | GET | ✓ | htmx fragment: live log tail |
 | `/api/strategy/<name>/pause` | POST | ✓ | Pause (disable ticks) for a strategy |
 | `/api/strategy/<name>/resume` | POST | ✓ | Resume a paused strategy |
@@ -782,8 +768,9 @@ The kill switch uses `PositionCloser` (see [position_closer.py](../position_clos
 This is an **emergency procedure** — not part of normal strategy operation.  It runs in a background thread and
 performs a complete shutdown sequence:
 
-1. `LifecycleManager.kill_all()` — cancel all tracked orders, mark all trades CLOSED
-2. `StrategyRunner.stop()` on all runners — prevent new trades
+1. `LifecycleEngine.kill_all()` — cancel all tracked orders, mark all trades CLOSED
+2. `OrderManager.cancel_all()` — belt-and-suspenders cleanup of all orders in the ledger
+3. `StrategyRunner.stop()` on all runners — prevent new trades
 3. Phase 1: limit orders at mark price (5 min, reprice every 30s)
 4. Phase 2: aggressive pricing ±10% off mark (2 min, reprice every 15s)
 5. Verify positions closed on exchange

@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from account_manager import AccountManager
     from strategy import StrategyRunner
     from trade_execution import TradeExecutor
-    from trade_lifecycle import LifecycleManager
+    from lifecycle_engine import LifecycleEngine
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ class PositionCloser:
     Two-phase mark-price position closer for the dashboard kill switch.
 
     Usage:
-        closer = PositionCloser(account_manager, executor, lifecycle_manager, notifier)
+        closer = PositionCloser(account_manager, executor, lifecycle_engine, notifier)
         closer.start(runners)     # non-blocking, runs in background thread
         closer.is_running         # True while closing
         closer.status             # human-readable phase string
@@ -87,7 +87,7 @@ class PositionCloser:
         self,
         account_manager: "AccountManager",
         executor: "TradeExecutor",
-        lifecycle_manager: "LifecycleManager",
+        lifecycle_manager: "LifecycleEngine",
     ):
         self._am = account_manager
         self._executor = executor

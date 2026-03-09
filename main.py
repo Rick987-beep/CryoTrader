@@ -18,7 +18,7 @@ import time
 
 from strategy import build_context, StrategyRunner
 from trade_lifecycle import TradeLifecycle, TradeState
-from strategies import blueprint_strangle, reverse_iron_condor_live, long_strangle_pnl_test, atm_straddle
+from strategies import blueprint_strangle, atm_straddle, test_strangle_11mar
 from persistence import TradeStatePersistence
 from health_check import HealthChecker
 from dashboard import start_dashboard
@@ -45,10 +45,9 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 STRATEGIES = [
-    atm_straddle,
+    # atm_straddle,
+    test_strangle_11mar,
     # blueprint_strangle,
-    # long_strangle_pnl_test,
-    # reverse_iron_condor_live,
 ]
 
 # =============================================================================
@@ -153,6 +152,67 @@ def _recover_trades(ctx, runners):
         # Re-attach exit conditions from the strategy config
         trade.exit_conditions = list(runner.config.exit_conditions)
 
+        # ── OPENING: orders placed but not all filled ────────────────────
+        # Orders may be live on the exchange.  Use OrderManager records
+        # (already loaded + polled) to determine fill status per leg.
+        # This avoids confusion with positions from other applications.
+        if trade.state == TradeState.OPENING:
+            logger.info(f"Recovering OPENING trade {trade.id} — checking order status")
+
+            # Poll all orders for this trade to get latest fill info
+            from order_manager import OrderPurpose
+            open_orders = order_manager.get_all_orders(trade.id, purpose=OrderPurpose.OPEN_LEG)
+
+            # Cancel any still-live orders for this trade
+            cancelled = order_manager.cancel_all_for(trade.id)
+            if cancelled:
+                logger.info(f"Trade {trade.id}: cancelled {cancelled} pending order(s) on exchange")
+
+            # Determine which legs had fills by checking order records.
+            # A requote chain means multiple orders per leg — sum fills
+            # across the chain for each leg_index.
+            leg_fills: dict = {}  # leg_index → (total_filled_qty, last_fill_price)
+            for rec in open_orders:
+                idx = rec.leg_index
+                prev_qty, prev_price = leg_fills.get(idx, (0.0, None))
+                if rec.filled_qty > 0:
+                    leg_fills[idx] = (prev_qty + rec.filled_qty, rec.avg_fill_price or rec.price)
+
+            filled_legs = []
+            all_legs_count = len(trade.open_legs)
+            for i, leg in enumerate(trade.open_legs):
+                fill_qty, fill_price = leg_fills.get(i, (0.0, None))
+                if fill_qty >= leg.qty:
+                    leg.filled_qty = leg.qty
+                    leg.fill_price = fill_price or leg.fill_price
+                    filled_legs.append(leg)
+
+            if len(filled_legs) == all_legs_count:
+                # All legs fully filled → promote to OPEN
+                trade.state = TradeState.OPEN
+                trade.opened_at = trade.opened_at or time.time()
+                logger.info(f"Trade {trade.id}: all {len(filled_legs)} legs filled via OrderManager → OPEN")
+            elif filled_legs:
+                # Partial fill — unwind filled legs
+                trade.open_legs = filled_legs
+                trade.state = TradeState.OPEN
+                trade.opened_at = time.time()
+                trade.state = TradeState.PENDING_CLOSE
+                logger.info(
+                    f"Trade {trade.id}: {len(filled_legs)}/{all_legs_count} legs filled "
+                    f"— unwinding via PENDING_CLOSE"
+                )
+            else:
+                # No fills — clean discard
+                trade.state = TradeState.FAILED
+                trade.error = "Crashed during opening — no fills"
+                logger.info(f"Trade {trade.id}: no fills in OrderManager → FAILED")
+
+            ctx.lifecycle_manager.restore_trade(trade)
+            recovered_active += 1
+            continue
+
+        # ── OPEN, PENDING_CLOSE, CLOSING: positions must exist ───────────
         # Verify all open legs still have positions on the exchange
         for leg in trade.open_legs:
             if leg.symbol not in exchange_symbols:
@@ -162,15 +222,8 @@ def _recover_trades(ctx, runners):
                 )
                 return None
 
-        # Normalize transient states to safe resume points
-        if trade.state == TradeState.OPENING:
-            # Positions confirmed on exchange → treat as filled
-            trade.state = TradeState.OPEN
-            trade.opened_at = trade.opened_at or time.time()
-            for leg in trade.open_legs:
-                if leg.filled_qty == 0:
-                    leg.filled_qty = leg.qty
-        elif trade.state == TradeState.CLOSING:
+        # Normalize CLOSING to safe resume point
+        if trade.state == TradeState.CLOSING:
             # Close orders died with the process → retry from PENDING_CLOSE
             trade.state = TradeState.PENDING_CLOSE
             trade.close_legs = []
@@ -284,6 +337,11 @@ def main():
     def shutdown(sig=None, frame=None):
         logger.info("Shutting down...")
         try:
+            # Persist current state before anything else — critical for crash recovery
+            ctx.lifecycle_manager._persist_all_trades()
+            order_manager = ctx.lifecycle_manager.order_manager
+            order_manager.persist_snapshot()
+
             # Stop health checker first
             health_checker.stop()
             
@@ -314,6 +372,17 @@ def main():
                 active_count = sum(1 for r in runners if r.active_trades)
                 if active_count > 0:
                     logger.debug(f"Health check: {active_count} active trades")
+
+                # Auto-stop: if every runner is done (daily quota met, no active trades)
+                if all(r.is_done for r in runners):
+                    logger.info("All strategies completed — shutting down automatically")
+                    # Persist state and stop services without force-closing (no active trades)
+                    ctx.lifecycle_manager._persist_all_trades()
+                    ctx.lifecycle_manager.order_manager.persist_snapshot()
+                    health_checker.stop()
+                    ctx.position_monitor.stop()
+                    logger.info("Shutdown complete")
+                    sys.exit(0)
                 
                 consecutive_errors = 0  # Reset on successful iteration
                 

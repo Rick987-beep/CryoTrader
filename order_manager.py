@@ -575,13 +575,26 @@ class OrderManager:
         Returns a list of warning strings for:
           - Orders in ledger marked live but not on exchange
           - Orders on exchange not in ledger (orphans)
+
+        Skips PENDING orders (not yet confirmed by exchange) and orders
+        placed within the last 30 seconds (exchange API propagation delay).
         """
+        GRACE_PERIOD = 30.0  # seconds — skip recently-placed orders
+        now = time.time()
         warnings = []
         exchange_ids = {str(o.get("orderId", "")) for o in exchange_open_orders}
 
         # Check ledger orders against exchange
         for record in self._orders.values():
-            if record.is_live and record.order_id not in exchange_ids:
+            if not record.is_live:
+                continue
+            # Skip PENDING — not yet confirmed on exchange
+            if record.status == OrderStatus.PENDING:
+                continue
+            # Skip recently-placed orders (exchange API propagation delay)
+            if now - record.placed_at < GRACE_PERIOD:
+                continue
+            if record.order_id not in exchange_ids:
                 msg = (
                     f"Ledger order {record.order_id} ({record.symbol}) marked "
                     f"{record.status.value} but not found on exchange"

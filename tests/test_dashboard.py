@@ -108,7 +108,7 @@ class FakePositionMonitor:
         return _snapshot
 
 
-class FakeLifecycleManager:
+class FakeLifecycleEngine:
     def force_close(self, trade_id):
         print(f"[FAKE] force_close({trade_id})")
 
@@ -120,7 +120,7 @@ class FakeNotifier:
 
 class FakeContext:
     position_monitor = FakePositionMonitor()
-    lifecycle_manager = FakeLifecycleManager()
+    lifecycle_manager = FakeLifecycleEngine()
     notifier = FakeNotifier()
 
 

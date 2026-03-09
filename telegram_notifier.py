@@ -170,9 +170,16 @@ class TelegramNotifier:
         roi: float,
         hold_minutes: float,
         entry_cost: float,
+        close_legs: list = None,
     ) -> None:
         """Notify when a trade is closed with PnL details."""
         emoji = "✅" if pnl >= 0 else "❌"
+        legs_text = ""
+        if close_legs:
+            legs_text = "\n" + "\n".join(
+                f"  {'SELL' if leg.side == 2 else 'BUY'} {leg.filled_qty}× {leg.symbol} @ ${leg.fill_price}"
+                for leg in close_legs
+            ) + "\n"
         self.send(
             f"{emoji} <b>Trade Closed</b>\n"
             f"Strategy: {strategy_name}\n"
@@ -180,9 +187,32 @@ class TelegramNotifier:
             f"PnL: <b>${pnl:+.2f}</b> ({roi:+.1f}%)\n"
             f"Hold: {hold_minutes:.1f} min\n"
             f"Entry cost: ${entry_cost:.2f}"
+            f"{legs_text}"
         )
 
     def notify_error(self, message: str) -> None:
         """Send a critical error alert."""
         ts = datetime.now(timezone.utc).strftime("%H:%M UTC")
         self.send(f"🚨 <b>Error</b> ({ts})\n{message}")
+
+    def notify_orphan_detected(self, order_ids: list, action_taken: str) -> None:
+        """Alert when orphan orders are found on the exchange."""
+        ids_text = ", ".join(str(oid) for oid in order_ids[:5])
+        if len(order_ids) > 5:
+            ids_text += f" (+{len(order_ids) - 5} more)"
+        self.send(
+            f"⚠️ <b>Orphan Orders Detected</b>\n"
+            f"Count: {len(order_ids)}\n"
+            f"IDs: {ids_text}\n"
+            f"Action: {action_taken}"
+        )
+
+    def notify_reconciliation_warning(self, warnings: list) -> None:
+        """Alert on reconciliation mismatches (stale ledger entries)."""
+        summary = "\n".join(f"• {w}" for w in warnings[:5])
+        if len(warnings) > 5:
+            summary += f"\n(+{len(warnings) - 5} more)"
+        self.send(
+            f"⚠️ <b>Reconciliation Warning</b>\n"
+            f"{len(warnings)} issue(s):\n{summary}"
+        )

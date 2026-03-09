@@ -104,6 +104,7 @@ def _on_trade_closed(trade, account) -> None:
             roi=roi,
             hold_minutes=hold_seconds / 60,
             entry_cost=entry_cost,
+            close_legs=trade.close_legs,
         )
     except Exception:
         pass

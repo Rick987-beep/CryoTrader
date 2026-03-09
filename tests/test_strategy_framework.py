@@ -18,8 +18,9 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from account_manager import AccountSnapshot, PositionSnapshot
+from lifecycle_engine import LifecycleEngine
 from trade_lifecycle import (
-    LifecycleManager, TradeLifecycle, TradeLeg, TradeState,
+    TradeLifecycle, TradeLeg, TradeState,
 )
 from option_selection import LegSpec
 from strategy import (
@@ -214,13 +215,13 @@ def test_2_config_construction():
 
 
 # =============================================================================
-# TEST 3: LifecycleManager strategy queries
+# TEST 3: LifecycleEngine strategy queries
 # =============================================================================
 
 def test_3_lifecycle_strategy_queries():
-    print("\n--- Test 3: LifecycleManager strategy queries ---")
+    print("\n--- Test 3: LifecycleEngine strategy queries ---")
 
-    lm = LifecycleManager()
+    lm = LifecycleEngine()
 
     # Create trades with different strategy IDs
     t1 = lm.create(
@@ -275,7 +276,7 @@ def test_3_lifecycle_strategy_queries():
 def test_4_persistence_snapshot():
     print("\n--- Test 4: Trade persistence snapshot ---")
 
-    lm = LifecycleManager()
+    lm = LifecycleEngine()
 
     lm.create(
         legs=[
@@ -501,7 +502,6 @@ def test_7_build_context_live():
     record("ctx.market_data", ctx.market_data is not None)
     record("ctx.executor", ctx.executor is not None)
     record("ctx.rfq_executor", ctx.rfq_executor is not None)
-    record("ctx.smart_executor", ctx.smart_executor is not None)
     record("ctx.account_manager", ctx.account_manager is not None)
     record("ctx.position_monitor", ctx.position_monitor is not None)
     record("ctx.lifecycle_manager", ctx.lifecycle_manager is not None)
