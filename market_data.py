@@ -74,6 +74,8 @@ class MarketData:
         self.auth = CoincallAuth(API_KEY, API_SECRET, BASE_URL)
         self._price_cache = None
         self._price_cache_time = None
+        self._index_cache = None
+        self._index_cache_time = None
         self._instruments_cache = TTLCache(ttl_seconds=30, max_size=10)
         self._details_cache = TTLCache(ttl_seconds=30, max_size=200)
 
@@ -131,6 +133,70 @@ class MarketData:
         fallback_price = 72000.0
         logger.warning(f"Using fallback price: {fallback_price}")
         return fallback_price
+
+    def get_btc_index_price(self, use_cache: bool = True) -> Optional[float]:
+        """
+        Get the BTCUSD index price from Coincall.
+
+        Tries (in order):
+          1. indexPrice from any cached option detail (free — no API call)
+          2. Fetch a near-ATM BTC option detail to extract indexPrice
+          3. Binance perpetual price as final fallback
+
+        Returns:
+            BTCUSD index price, or None if all sources fail.
+        """
+        # Check cache
+        if use_cache and self._index_cache is not None:
+            if time.time() - self._index_cache_time < 30:
+                return self._index_cache
+
+        # 1) Extract indexPrice from any cached option detail (free)
+        for _key, (details, _ts) in list(self._details_cache._cache.items()):
+            if isinstance(details, dict) and 'indexPrice' in details:
+                price = float(details['indexPrice'])
+                if price > 0:
+                    self._index_cache = price
+                    self._index_cache_time = time.time()
+                    logger.debug(f"BTC index price (option detail cache): {price}")
+                    return price
+
+        # 2) Fetch a near-ATM option to get indexPrice (1 API call)
+        try:
+            instruments = self.get_option_instruments('BTC')
+            if instruments:
+                symbol = instruments[0].get('symbolName')
+                if symbol:
+                    details = self.get_option_details(symbol)
+                    if details and 'indexPrice' in details:
+                        price = float(details['indexPrice'])
+                        if price > 0:
+                            self._index_cache = price
+                            self._index_cache_time = time.time()
+                            logger.debug(f"BTC index price (option detail fetch): {price}")
+                            return price
+        except Exception as e:
+            logger.warning(f"BTC index from option detail failed: {e}")
+
+        # 3) Binance perpetual as final fallback (perp ≈ index)
+        try:
+            response = requests.get(
+                'https://fapi.binance.com/fapi/v1/ticker/price?symbol=BTCUSDT',
+                timeout=5,
+            )
+            if response.status_code == 200:
+                data = response.json()
+                price = float(data.get('price', 0))
+                if price > 0:
+                    self._index_cache = price
+                    self._index_cache_time = time.time()
+                    logger.info(f"BTC index price (Binance fallback): {price}")
+                    return price
+        except Exception as e:
+            logger.warning(f"Binance fallback for index price failed: {e}")
+
+        logger.warning("Could not retrieve BTC index price from any source")
+        return None
 
     def get_option_instruments(self, underlying: str = 'BTC') -> Optional[List[Dict[str, Any]]]:
         """
@@ -324,6 +390,11 @@ market_data = MarketData()
 def get_btc_futures_price(use_cache: bool = True) -> float:
     """Get BTC/USDT futures price"""
     return market_data.get_btc_futures_price(use_cache)
+
+
+def get_btc_index_price(use_cache: bool = True) -> Optional[float]:
+    """Get BTCUSD index price (dedicated index endpoint with fallbacks)"""
+    return market_data.get_btc_index_price(use_cache)
 
 
 def get_option_instruments(underlying: str = 'BTC') -> Optional[List[Dict[str, Any]]]:

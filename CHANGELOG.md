@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2026-03-11
+
+### Added
+
+#### ATM Straddle — Index Move Strategy
+- **`strategies/atm_straddle_index_move.py`** (NEW) — Daily long ATM straddle that closes when the BTCUSD index moves ≥ $N from entry (symmetric up/down), instead of using option PnL. Entry index price captured in `trade.metadata["entry_index_price"]` via `on_trade_opened`. Default distance: $1200 (parameterized for daily adjustment).
+
+#### BTC Index Price Support
+- **`market_data.py`** — New `get_btc_index_price()` method + module-level convenience function. Sources (in order): cached option detail `indexPrice`, fresh option detail fetch, Binance perpetual fallback. 30s cache.
+
+### Changed
+
+#### Telegram Notifications — Equity & Margin
+- **`strategies/atm_straddle.py`** — Trade opened/closed notifications now include equity, available margin, and margin % free.
+- **`strategies/atm_straddle_index_move.py`** — Same enrichment, plus BTC index entry/close prices and move distance.
+
+#### Daily Repeat Fix
+- **`main.py`** — Removed auto-`sys.exit(0)` when all strategies hit their daily quota. The process now stays alive, and `max_trades_per_day` counters naturally reset at UTC midnight. Strategies repeat indefinitely.
+
+#### Cleanup
+- **`strategies/__init__.py`**, **`main.py`** — Removed `test_strangle_11mar` (file deleted in prior session).
+
+### Files Changed
+- NEW: `strategies/atm_straddle_index_move.py`
+- NEW: `analysis/README.md`
+- MODIFIED: `market_data.py` (get_btc_index_price)
+- MODIFIED: `main.py` (daily repeat fix, strategy wiring)
+- MODIFIED: `strategies/atm_straddle.py` (enriched notifications)
+- MODIFIED: `strategies/__init__.py` (new strategy export, dead import removed)
+
+---
+
 ## [1.0.1] - 2026-03-11
 
 ### Added — Phase 3 Hardening

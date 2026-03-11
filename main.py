@@ -18,7 +18,7 @@ import time
 
 from strategy import build_context, StrategyRunner
 from trade_lifecycle import TradeLifecycle, TradeState
-from strategies import blueprint_strangle, atm_straddle, test_strangle_11mar
+from strategies import blueprint_strangle, atm_straddle, atm_straddle_index_move
 from persistence import TradeStatePersistence
 from health_check import HealthChecker
 from dashboard import start_dashboard
@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 STRATEGIES = [
     # atm_straddle,
-    test_strangle_11mar,
+    atm_straddle_index_move,
     # blueprint_strangle,
 ]
 
@@ -373,16 +373,9 @@ def main():
                 if active_count > 0:
                     logger.debug(f"Health check: {active_count} active trades")
 
-                # Auto-stop: if every runner is done (daily quota met, no active trades)
+                # Log when all runners have finished their daily quota
                 if all(r.is_done for r in runners):
-                    logger.info("All strategies completed — shutting down automatically")
-                    # Persist state and stop services without force-closing (no active trades)
-                    ctx.lifecycle_manager._persist_all_trades()
-                    ctx.lifecycle_manager.order_manager.persist_snapshot()
-                    health_checker.stop()
-                    ctx.position_monitor.stop()
-                    logger.info("Shutdown complete")
-                    sys.exit(0)
+                    logger.debug("All strategies done for today — waiting for next UTC day")
                 
                 consecutive_errors = 0  # Reset on successful iteration
                 
