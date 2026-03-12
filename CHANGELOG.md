@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2026-03-12
+
+### Fixed
+
+#### Critical: Stale BTC Index Price — Take Profit Never Triggered
+- **Root cause:** `get_btc_index_price()` in `market_data.py` directly iterated `_details_cache._cache.items()`, bypassing the `TTLCache.get()` TTL check. Expired option detail entries (with an old `indexPrice`) were read as if fresh, then used to re-populate `_index_cache` with a new timestamp — creating an infinite stale-cache loop. The index price never updated, so `index_move_distance()` never detected real BTC movement.
+- **Impact:** On March 11, the ATM straddle index-move strategy opened at 12:00 UTC with entry index $69,194 (threshold ±$1,200). BTC rose ~$1,300+ through the afternoon (confirmed by option deltas and prices), but the bot saw a frozen index of $69,461 the entire 7 hours. The index-based TP never triggered; the trade closed at 19:00 UTC via `time_exit` at a $3.64 loss.
+
+#### Fix 1 — TTLCache: `fresh_items()` method (NEW)
+- **`market_data.py`** — Added `TTLCache.fresh_items()`: yields only non-expired `(key, value)` pairs and evicts stale entries during iteration. Provides a proper TTL-enforced iteration API.
+
+#### Fix 2 — `get_btc_index_price()` step 1 enforces TTL
+- **`market_data.py`** — Replaced `self._details_cache._cache.items()` with `self._details_cache.fresh_items()`. Expired option detail entries are now skipped and evicted, breaking the stale-cache loop.
+
+#### Fix 3 — Frozen-price detection
+- **`market_data.py`** — New `_update_index_cache()` helper centralises cache writes. Logs a `WARNING` if the index price hasn't changed for > 60 seconds (possible stale feed). All index-price source logging upgraded from `DEBUG` to `INFO` for production visibility.
+
+#### Fix 4 — Exit condition forces fresh fetch
+- **`strategies/atm_straddle_index_move.py`** — `index_move_distance()` now calls `get_btc_index_price(use_cache=False)`. Exit evaluation is safety-critical and runs only every 30s, so the extra API call is acceptable and eliminates secondary caching risk.
+
+#### Fix 5 — Health check monitors index price
+- **`health_check.py`** — Every 5-minute health check now fetches the BTC index price with `use_cache=False` and logs a `WARNING` if unavailable, providing early alerting for feed problems.
+
+### Files Changed
+- MODIFIED: `market_data.py` (TTLCache.fresh_items, get_btc_index_price fix, _update_index_cache, frozen-price detection)
+- MODIFIED: `strategies/atm_straddle_index_move.py` (use_cache=False for exit condition)
+- MODIFIED: `health_check.py` (index price freshness check)
+
+---
+
 ## [1.0.2] - 2026-03-11
 
 ### Added

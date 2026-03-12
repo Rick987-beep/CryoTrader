@@ -123,6 +123,19 @@ class HealthChecker:
         else:
             status_lines.append("Account snapshot: (not configured)")
 
+        # Check BTC index price freshness
+        try:
+            from market_data import get_btc_index_price
+            idx_price = get_btc_index_price(use_cache=False)
+            if idx_price is not None:
+                status_lines.append(f"BTC Index Price: ${idx_price:,.2f}")
+            else:
+                log_level = logging.WARNING
+                status_lines.append("⚠ BTC INDEX PRICE UNAVAILABLE")
+        except Exception as e:
+            log_level = logging.WARNING
+            status_lines.append(f"⚠ BTC index price check failed: {e}")
+
         status_lines.append(f"═══════════════════════════════════════════════════════════════════")
 
         # Log at DEBUG normally, WARNING only when something looks wrong
