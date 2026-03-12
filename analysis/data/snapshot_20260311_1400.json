@@ -1,0 +1,523 @@
+{
+  "timestamp_utc": "2026-03-11T14:00:19.396811+00:00",
+  "timestamp_epoch": 1773237619.396811,
+  "index_price": 69461.38717391,
+  "atm_strike": 69500.0,
+  "expiry_ts": 1773302400000,
+  "expiry_date": "12Mar26",
+  "strikes": [
+    {
+      "strike": 64500.0,
+      "call": {
+        "symbol": "BTCUSD-12MAR26-64500-C",
+        "bid": 0.0,
+        "ask": 0.0,
+        "mid": 5691.64343959,
+        "mark_price": 5691.64343959,
+        "iv": null,
+        "delta": 0.98463,
+        "gamma": 1e-05,
+        "theta": -54.3087,
+        "vega": 1.23003
+      },
+      "put": {
+        "symbol": "BTCUSD-12MAR26-64500-P",
+        "bid": 0.0,
+        "ask": 25.0,
+        "mid": 16.031636,
+        "mark_price": 16.031636,
+        "iv": null,
+        "delta": -0.01592,
+        "gamma": 1e-05,
+        "theta": -55.45283,
+        "vega": 1.26784
+      }
+    },
+    {
+      "strike": 65000.0,
+      "call": {
+        "symbol": "BTCUSD-12MAR26-65000-C",
+        "bid": 0.0,
+        "ask": 0.0,
+        "mid": 5195.23413908,
+        "mark_price": 5195.23413908,
+        "iv": null,
+        "delta": 0.97987,
+        "gamma": 2e-05,
+        "theta": -76.62398,
+        "vega": 1.54834
+      },
+      "put": {
+        "symbol": "BTCUSD-12MAR26-65000-P",
+        "bid": 0.0,
+        "ask": 25.0,
+        "mid": 20.0507536,
+        "mark_price": 20.0507536,
+        "iv": null,
+        "delta": -0.02031,
+        "gamma": 2e-05,
+        "theta": -64.71436,
+        "vega": 1.55988
+      }
+    },
+    {
+      "strike": 65500.0,
+      "call": {
+        "symbol": "BTCUSD-12MAR26-65500-C",
+        "bid": 0.0,
+        "ask": 0.0,
+        "mid": 4701.17761955,
+        "mark_price": 4701.17761955,
+        "iv": null,
+        "delta": 0.97359,
+        "gamma": 2e-05,
+        "theta": -89.39312,
+        "vega": 1.94588
+      },
+      "put": {
+        "symbol": "BTCUSD-12MAR26-65500-P",
+        "bid": 10.0,
+        "ask": 30.0,
+        "mid": 20.0,
+        "mark_price": 25.87831761,
+        "iv": null,
+        "delta": -0.02657,
+        "gamma": 2e-05,
+        "theta": -77.28935,
+        "vega": 1.95575
+      }
+    },
+    {
+      "strike": 66000.0,
+      "call": {
+        "symbol": "BTCUSD-12MAR26-66000-C",
+        "bid": 0.0,
+        "ask": 0.0,
+        "mid": 4209.51604652,
+        "mark_price": 4209.51604652,
+        "iv": null,
+        "delta": 0.9647,
+        "gamma": 3e-05,
+        "theta": -105.60487,
+        "vega": 2.47481
+      },
+      "put": {
+        "symbol": "BTCUSD-12MAR26-66000-P",
+        "bid": 15.0,
+        "ask": 40.0,
+        "mid": 27.5,
+        "mark_price": 34.54104654,
+        "iv": null,
+        "delta": -0.03567,
+        "gamma": 3e-05,
+        "theta": -94.08359,
+        "vega": 2.49582
+      }
+    },
+    {
+      "strike": 66500.0,
+      "call": {
+        "symbol": "BTCUSD-12MAR26-66500-C",
+        "bid": 0.0,
+        "ask": 0.0,
+        "mid": 3722.41351894,
+        "mark_price": 3722.41351894,
+        "iv": null,
+        "delta": 0.95159,
+        "gamma": 4e-05,
+        "theta": -126.19655,
+        "vega": 3.19637
+      },
+      "put": {
+        "symbol": "BTCUSD-12MAR26-66500-P",
+        "bid": 25.0,
+        "ask": 45.0,
+        "mid": 35.0,
+        "mark_price": 47.25758553,
+        "iv": null,
+        "delta": -0.04875,
+        "gamma": 4e-05,
+        "theta": -115.6835,
+        "vega": 3.21432
+      }
+    },
+    {
+      "strike": 67000.0,
+      "call": {
+        "symbol": "BTCUSD-12MAR26-67000-C",
+        "bid": 0.0,
+        "ask": 0.0,
+        "mid": 3241.52128575,
+        "mark_price": 3241.52128575,
+        "iv": null,
+        "delta": 0.93375,
+        "gamma": 6e-05,
+        "theta": -141.01938,
+        "vega": 4.09328
+      },
+      "put": {
+        "symbol": "BTCUSD-12MAR26-67000-P",
+        "bid": 40.0,
+        "ask": 60.0,
+        "mid": 50.0,
+        "mark_price": 64.61289626,
+        "iv": null,
+        "delta": -0.06652,
+        "gamma": 6e-05,
+        "theta": -141.08686,
+        "vega": 4.10642
+      }
+    },
+    {
+      "strike": 67500.0,
+      "call": {
+        "symbol": "BTCUSD-12MAR26-67500-C",
+        "bid": 1799.0,
+        "ask": 3259.0,
+        "mid": 2529.0,
+        "mark_price": 2772.246234,
+        "iv": null,
+        "delta": 0.90652,
+        "gamma": 8e-05,
+        "theta": -175.50255,
+        "vega": 5.31281
+      },
+      "put": {
+        "symbol": "BTCUSD-12MAR26-67500-P",
+        "bid": 65.0,
+        "ask": 85.0,
+        "mid": 75.0,
+        "mark_price": 93.17788377,
+        "iv": null,
+        "delta": -0.09394,
+        "gamma": 8e-05,
+        "theta": -175.92516,
+        "vega": 5.33213
+      }
+    },
+    {
+      "strike": 68000.0,
+      "call": {
+        "symbol": "BTCUSD-12MAR26-68000-C",
+        "bid": 1095.0,
+        "ask": 2845.0,
+        "mid": 1970.0,
+        "mark_price": 2312.82674213,
+        "iv": null,
+        "delta": 0.86704,
+        "gamma": 0.00011,
+        "theta": -206.60658,
+        "vega": 6.83551
+      },
+      "put": {
+        "symbol": "BTCUSD-12MAR26-68000-P",
+        "bid": 105.0,
+        "ask": 125.0,
+        "mid": 115.0,
+        "mark_price": 136.63877918,
+        "iv": null,
+        "delta": -0.13304,
+        "gamma": 0.00011,
+        "theta": -217.99781,
+        "vega": 6.8384
+      }
+    },
+    {
+      "strike": 68500.0,
+      "call": {
+        "symbol": "BTCUSD-12MAR26-68500-C",
+        "bid": 331.0,
+        "ask": 2559.0,
+        "mid": 1445.0,
+        "mark_price": 1880.72903867,
+        "iv": null,
+        "delta": 0.81342,
+        "gamma": 0.00014,
+        "theta": -252.07672,
+        "vega": 8.53739
+      },
+      "put": {
+        "symbol": "BTCUSD-12MAR26-68500-P",
+        "bid": 170.0,
+        "ask": 185.0,
+        "mid": 177.5,
+        "mark_price": 201.71562829,
+        "iv": null,
+        "delta": -0.18713,
+        "gamma": 0.00014,
+        "theta": -263.35578,
+        "vega": 8.55283
+      }
+    },
+    {
+      "strike": 69000.0,
+      "call": {
+        "symbol": "BTCUSD-12MAR26-69000-C",
+        "bid": 0.0,
+        "ask": 2441.0,
+        "mid": 1482.75884033,
+        "mark_price": 1482.75884033,
+        "iv": null,
+        "delta": 0.74339,
+        "gamma": 0.00017,
+        "theta": -301.4201,
+        "vega": 10.24961
+      },
+      "put": {
+        "symbol": "BTCUSD-12MAR26-69000-P",
+        "bid": 260.0,
+        "ask": 265.0,
+        "mid": 262.5,
+        "mark_price": 296.81879037,
+        "iv": null,
+        "delta": -0.25899,
+        "gamma": 0.00017,
+        "theta": -307.8435,
+        "vega": 10.29925
+      }
+    },
+    {
+      "strike": 69500.0,
+      "call": {
+        "symbol": "BTCUSD-12MAR26-69500-C",
+        "bid": 1080.0,
+        "ask": 1150.0,
+        "mid": 1115.0,
+        "mark_price": 1123.21254261,
+        "iv": null,
+        "delta": 0.65732,
+        "gamma": 0.0002,
+        "theta": -334.76672,
+        "vega": 11.69371
+      },
+      "put": {
+        "symbol": "BTCUSD-12MAR26-69500-P",
+        "bid": 380.0,
+        "ask": 395.0,
+        "mid": 387.5,
+        "mark_price": 427.38475887,
+        "iv": null,
+        "delta": -0.34777,
+        "gamma": 0.0002,
+        "theta": -340.63346,
+        "vega": 11.75804
+      }
+    },
+    {
+      "strike": 70000.0,
+      "call": {
+        "symbol": "BTCUSD-12MAR26-70000-C",
+        "bid": 765.0,
+        "ask": 805.0,
+        "mid": 785.0,
+        "mark_price": 801.02777267,
+        "iv": null,
+        "delta": 0.54954,
+        "gamma": 0.00023,
+        "theta": -343.51639,
+        "vega": 12.5963
+      },
+      "put": {
+        "symbol": "BTCUSD-12MAR26-70000-P",
+        "bid": 550.0,
+        "ask": 580.0,
+        "mid": 565.0,
+        "mark_price": 606.25881113,
+        "iv": null,
+        "delta": -0.45113,
+        "gamma": 0.00023,
+        "theta": -351.57839,
+        "vega": 12.59893
+      }
+    },
+    {
+      "strike": 70500.0,
+      "call": {
+        "symbol": "BTCUSD-12MAR26-70500-C",
+        "bid": 515.0,
+        "ask": 540.0,
+        "mid": 527.5,
+        "mark_price": 539.14474449,
+        "iv": null,
+        "delta": 0.43285,
+        "gamma": 0.00023,
+        "theta": -330.41472,
+        "vega": 12.51405
+      },
+      "put": {
+        "symbol": "BTCUSD-12MAR26-70500-P",
+        "bid": 790.0,
+        "ask": 825.0,
+        "mid": 807.5,
+        "mark_price": 857.59201874,
+        "iv": null,
+        "delta": -0.57028,
+        "gamma": 0.00023,
+        "theta": -355.4789,
+        "vega": 12.49812
+      }
+    },
+    {
+      "strike": 71000.0,
+      "call": {
+        "symbol": "BTCUSD-12MAR26-71000-C",
+        "bid": 330.0,
+        "ask": 350.0,
+        "mid": 340.0,
+        "mark_price": 353.63066949,
+        "iv": null,
+        "delta": 0.32249,
+        "gamma": 0.00021,
+        "theta": -299.22562,
+        "vega": 11.41709
+      },
+      "put": {
+        "symbol": "BTCUSD-12MAR26-71000-P",
+        "bid": 0.0,
+        "ask": 2405.0,
+        "mid": 1162.02437885,
+        "mark_price": 1162.02437885,
+        "iv": null,
+        "delta": -0.6767,
+        "gamma": 0.00021,
+        "theta": -317.97159,
+        "vega": 11.42883
+      }
+    },
+    {
+      "strike": 71500.0,
+      "call": {
+        "symbol": "BTCUSD-12MAR26-71500-C",
+        "bid": 200.0,
+        "ask": 215.0,
+        "mid": 207.5,
+        "mark_price": 223.01620362,
+        "iv": null,
+        "delta": 0.22809,
+        "gamma": 0.00018,
+        "theta": -256.31967,
+        "vega": 9.61679
+      },
+      "put": {
+        "symbol": "BTCUSD-12MAR26-71500-P",
+        "bid": 0.0,
+        "ask": 2546.0,
+        "mid": 1532.34374338,
+        "mark_price": 1532.34374338,
+        "iv": null,
+        "delta": -0.77322,
+        "gamma": 0.00018,
+        "theta": -267.72913,
+        "vega": 9.58558
+      }
+    },
+    {
+      "strike": 72000.0,
+      "call": {
+        "symbol": "BTCUSD-12MAR26-72000-C",
+        "bid": 110.0,
+        "ask": 135.0,
+        "mid": 122.5,
+        "mark_price": 136.01274542,
+        "iv": null,
+        "delta": 0.15364,
+        "gamma": 0.00014,
+        "theta": -203.47329,
+        "vega": 7.53802
+      },
+      "put": {
+        "symbol": "BTCUSD-12MAR26-72000-P",
+        "bid": 1389.0,
+        "ask": 2780.0,
+        "mid": 2084.5,
+        "mark_price": 1941.69465759,
+        "iv": null,
+        "delta": -0.84764,
+        "gamma": 0.00014,
+        "theta": -210.59893,
+        "vega": 7.49619
+      }
+    },
+    {
+      "strike": 72500.0,
+      "call": {
+        "symbol": "BTCUSD-12MAR26-72500-C",
+        "bid": 60.0,
+        "ask": 85.0,
+        "mid": 72.5,
+        "mark_price": 81.51255058,
+        "iv": null,
+        "delta": 0.09968,
+        "gamma": 0.0001,
+        "theta": -152.66539,
+        "vega": 5.57117
+      },
+      "put": {
+        "symbol": "BTCUSD-12MAR26-72500-P",
+        "bid": 0.0,
+        "ask": 0.0,
+        "mid": 2387.98512,
+        "mark_price": 2387.98512,
+        "iv": null,
+        "delta": -0.90126,
+        "gamma": 0.0001,
+        "theta": -169.03821,
+        "vega": 5.53334
+      }
+    },
+    {
+      "strike": 73000.0,
+      "call": {
+        "symbol": "BTCUSD-12MAR26-73000-C",
+        "bid": 35.0,
+        "ask": 55.0,
+        "mid": 45.0,
+        "mark_price": 49.04744365,
+        "iv": null,
+        "delta": 0.06336,
+        "gamma": 7e-05,
+        "theta": -109.56629,
+        "vega": 3.95565
+      },
+      "put": {
+        "symbol": "BTCUSD-12MAR26-73000-P",
+        "bid": 0.0,
+        "ask": 0.0,
+        "mid": 2840.43978981,
+        "mark_price": 2840.43978981,
+        "iv": null,
+        "delta": -0.9343,
+        "gamma": 7e-05,
+        "theta": -99.03591,
+        "vega": 4.06741
+      }
+    },
+    {
+      "strike": 74000.0,
+      "call": {
+        "symbol": "BTCUSD-12MAR26-74000-C",
+        "bid": 10.0,
+        "ask": 30.0,
+        "mid": 20.0,
+        "mark_price": 22.34008929,
+        "iv": null,
+        "delta": 0.02993,
+        "gamma": 3e-05,
+        "theta": -66.58671,
+        "vega": 2.16053
+      },
+      "put": {
+        "symbol": "BTCUSD-12MAR26-74000-P",
+        "bid": 0.0,
+        "ask": 0.0,
+        "mid": 3811.11186192,
+        "mark_price": 3811.11186192,
+        "iv": null,
+        "delta": -0.97034,
+        "gamma": 3e-05,
+        "theta": -48.6687,
+        "vega": 2.14405
+      }
+    }
+  ]
+}

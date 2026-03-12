@@ -61,6 +61,22 @@ class TTLCache:
 
         self._cache[key] = (value, time.time())
 
+    def fresh_items(self):
+        """Yield (key, value) pairs for entries that have NOT expired.
+
+        Also evicts any expired entries encountered during iteration,
+        keeping the internal dict clean.
+        """
+        now = time.time()
+        expired = []
+        for key, (value, ts) in list(self._cache.items()):
+            if now - ts > self.ttl_seconds:
+                expired.append(key)
+            else:
+                yield key, value
+        for key in expired:
+            del self._cache[key]
+
     def clear(self) -> None:
         """Clear all cache entries."""
         self._cache.clear()
@@ -139,7 +155,7 @@ class MarketData:
         Get the BTCUSD index price from Coincall.
 
         Tries (in order):
-          1. indexPrice from any cached option detail (free — no API call)
+          1. indexPrice from a *fresh* (TTL-valid) cached option detail
           2. Fetch a near-ATM BTC option detail to extract indexPrice
           3. Binance perpetual price as final fallback
 
@@ -151,14 +167,14 @@ class MarketData:
             if time.time() - self._index_cache_time < 30:
                 return self._index_cache
 
-        # 1) Extract indexPrice from any cached option detail (free)
-        for _key, (details, _ts) in list(self._details_cache._cache.items()):
+        # 1) Extract indexPrice from a *fresh* cached option detail.
+        #    Uses fresh_items() to enforce TTL — expired entries are skipped
+        #    and evicted, preventing the stale-cache loop.
+        for _key, details in self._details_cache.fresh_items():
             if isinstance(details, dict) and 'indexPrice' in details:
                 price = float(details['indexPrice'])
                 if price > 0:
-                    self._index_cache = price
-                    self._index_cache_time = time.time()
-                    logger.debug(f"BTC index price (option detail cache): {price}")
+                    self._update_index_cache(price, "option detail cache")
                     return price
 
         # 2) Fetch a near-ATM option to get indexPrice (1 API call)
@@ -171,9 +187,7 @@ class MarketData:
                     if details and 'indexPrice' in details:
                         price = float(details['indexPrice'])
                         if price > 0:
-                            self._index_cache = price
-                            self._index_cache_time = time.time()
-                            logger.debug(f"BTC index price (option detail fetch): {price}")
+                            self._update_index_cache(price, "option detail fetch")
                             return price
         except Exception as e:
             logger.warning(f"BTC index from option detail failed: {e}")
@@ -188,15 +202,32 @@ class MarketData:
                 data = response.json()
                 price = float(data.get('price', 0))
                 if price > 0:
-                    self._index_cache = price
-                    self._index_cache_time = time.time()
-                    logger.info(f"BTC index price (Binance fallback): {price}")
+                    self._update_index_cache(price, "Binance fallback")
                     return price
         except Exception as e:
             logger.warning(f"Binance fallback for index price failed: {e}")
 
         logger.warning("Could not retrieve BTC index price from any source")
         return None
+
+    def _update_index_cache(self, price: float, source: str) -> None:
+        """Store a new index price, log the source, and warn if frozen."""
+        now = time.time()
+
+        # Detect frozen price: same value for > 60s is suspicious
+        if (self._index_cache is not None
+                and self._index_cache == price
+                and self._index_cache_time is not None
+                and now - self._index_cache_time > 60):
+            stale_secs = int(now - self._index_cache_time)
+            logger.warning(
+                f"BTC index price unchanged at ${price:,.2f} for {stale_secs}s "
+                f"(source: {source}) — possible stale feed"
+            )
+
+        self._index_cache = price
+        self._index_cache_time = now
+        logger.info(f"BTC index price ({source}): ${price:,.2f}")
 
     def get_option_instruments(self, underlying: str = 'BTC') -> Optional[List[Dict[str, Any]]]:
         """

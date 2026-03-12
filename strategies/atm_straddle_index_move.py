@@ -79,7 +79,10 @@ def index_move_distance(distance_usd):
         if entry_price is None:
             return False
 
-        current_price = get_btc_index_price(use_cache=True)
+        # Force a fresh fetch — exit evaluation is safety-critical and
+        # runs only every CHECK_INTERVAL seconds, so the extra API call
+        # is acceptable and avoids stale-cache risks.
+        current_price = get_btc_index_price(use_cache=False)
         if current_price is None:
             return False
 

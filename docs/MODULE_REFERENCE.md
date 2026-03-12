@@ -1,6 +1,6 @@
 # CoincallTrader — Module Reference
 
-**Last Updated:** March 9, 2026
+**Last Updated:** March 12, 2026
 
 Internal documentation for the CoincallTrader application modules.
 For Coincall exchange API endpoints, see [API_REFERENCE.md](API_REFERENCE.md).
@@ -256,6 +256,7 @@ ctx.position_monitor.on_update(runner.tick)
 | `max_loss(pct)` | `float → Callable` | Close when structure loss ≥ pct of entry cost |
 | `max_hold_hours(hours)` | `float → Callable` | Close after N hours |
 | `time_exit(hour, minute)` | `int, int → Callable` | Close at or after a specific UTC wall-clock time (e.g., `time_exit(19, 0)`) |
+| `index_move_distance(usd)` | `float → Callable` | Close when BTC index moves ≥ $N from `trade.metadata["entry_index_price"]`. Forces fresh fetch (`use_cache=False`). Defined in `strategies/atm_straddle_index_move.py`. |
 | `utc_datetime_exit(dt)` | `datetime → Callable` | Close at or after a specific UTC datetime |
 | `account_delta_limit(thr)` | `float → Callable` | Close when account delta exceeds threshold |
 | `structure_delta_limit(thr)` | `float → Callable` | Close when structure delta exceeds threshold |
@@ -468,6 +469,65 @@ monitor.stop()
 
 ### Position Fields
 Uses `upnlByMarkPrice` and `roiByMarkPrice` for accurate options PnL (not `upnl`/`roi` which use last trade price). Also captures `lastPrice`, `indexPrice`, `value` fields.
+
+---
+
+## Market Data & Caching
+
+See [market_data.py](../market_data.py) for the implementation.
+
+### Overview
+
+Centralised market data retrieval with TTL-based caching for API resilience. All market data flows through the global `MarketData` singleton and module-level convenience functions.
+
+### Key Classes
+| Class | Purpose |
+|-------|----------|
+| `TTLCache` | Simple dict-based cache with per-entry time-to-live and max-size eviction. Default TTL: 30s. |
+| `MarketData` | Singleton handling BTC futures price, BTC index price, option instruments, option details, option Greeks, and orderbook depth. |
+
+### TTLCache API
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `get(key)` | `str → Optional[Any]` | Returns cached value if fresh (< TTL), else `None`. Evicts expired entries. |
+| `set(key, value)` | `str, Any → None` | Store entry with current timestamp. Evicts oldest if at capacity. |
+| `fresh_items()` | `→ Iterator[(str, Any)]` | Yields `(key, value)` for non-expired entries only. Evicts expired entries during iteration. *(Added v1.0.3)* |
+| `clear()` | `→ None` | Remove all entries. |
+
+### BTC Index Price — `get_btc_index_price(use_cache=True)`
+
+Returns the BTCUSD index price from the best available source. Cached for 30s.
+
+**Resolution order:**
+1. **Index cache** — returns immediately if `use_cache=True` and cache age < 30s.
+2. **Fresh option detail cache** — scans `_details_cache` via `fresh_items()` for a non-expired entry containing `indexPrice`. Zero API calls. *(Fixed in v1.0.3 — previously bypassed TTL.)* 
+3. **Option detail fetch** — fetches the first available instrument's detail from Coincall (`/open/option/detail/v1/{symbol}`). Extracts `indexPrice`.
+4. **Binance fallback** — `fapi.binance.com` perpetual futures price as last resort.
+
+**Frozen-price detection:** `_update_index_cache()` logs a `WARNING` if the price value hasn't changed for > 60 seconds, indicating a possible stale exchange feed.
+
+### Convenience Functions (module-level)
+| Function | Maps to |
+|----------|----------|
+| `get_btc_futures_price(use_cache)` | `MarketData.get_btc_futures_price()` |
+| `get_btc_index_price(use_cache)` | `MarketData.get_btc_index_price()` |
+| `get_option_instruments(underlying)` | `MarketData.get_option_instruments()` |
+| `get_option_details(symbol)` | `MarketData.get_option_details()` |
+| `get_option_greeks(symbol)` | `MarketData.get_option_greeks()` |
+| `get_option_market_data(symbol)` | `MarketData.get_option_market_data()` |
+| `get_option_orderbook(symbol)` | `MarketData.get_option_orderbook()` |
+
+### Cache Architecture
+| Cache | TTL | Purpose |
+|-------|-----|----------|
+| `_price_cache` | 30s | BTC/USDT futures price (manual TTL) |
+| `_index_cache` | 30s | BTC index price (manual TTL) |
+| `_instruments_cache` | 30s | Option instruments per underlying (`TTLCache`, max 10) |
+| `_details_cache` | 30s | Option details per symbol (`TTLCache`, max 200) |
+
+### Design Note — `use_cache` Parameter
+- **`use_cache=True`** (default): suitable for display, non-critical reads, and high-frequency callers.
+- **`use_cache=False`**: forces a fresh API fetch. Required for safety-critical code paths such as exit condition evaluation and trade-open callbacks.
 
 ---
 
@@ -797,7 +857,7 @@ Background thread that logs system health every 5 minutes. Provides visibility i
 ### Key Class
 | Class | Purpose |
 |-------|----------|
-| `HealthChecker` | Daemon thread: polls `account_snapshot_fn()` on interval, logs at DEBUG (normal) or WARNING (high margin / low equity). Triggers `notifier.notify_daily_summary()` once per ~23 h. |
+| `HealthChecker` | Daemon thread: polls `account_snapshot_fn()` on interval, logs at DEBUG (normal) or WARNING (high margin / low equity). Triggers `notifier.notify_daily_summary()` once per ~23 h. Also checks BTC index price freshness (v1.0.3). |
 
 ### Key Methods
 | Method | Purpose |
@@ -810,6 +870,7 @@ Background thread that logs system health every 5 minutes. Provides visibility i
 - **Normal**: logged at `DEBUG` (suppressed unless log level lowered)
 - **Margin utilization > 80%**: escalated to `WARNING`
 - **Equity < $100**: escalated to `WARNING`
+- **BTC index price unavailable**: escalated to `WARNING` *(added v1.0.3)*
 
 ---
 
