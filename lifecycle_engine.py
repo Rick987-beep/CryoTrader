@@ -545,12 +545,21 @@ class LifecycleEngine:
     # ── Persistence ──────────────────────────────────────────────────────
 
     def _persist_all_trades(self) -> None:
-        """Dump all trade states to JSON for crash recovery."""
+        """Dump all trade states to JSON for crash recovery.
+
+        Uses write-to-temp → fsync → atomic rename to prevent corruption
+        if the process or OS crashes mid-write.
+        """
         try:
             os.makedirs("logs", exist_ok=True)
             trades_data = [trade.to_dict() for trade in self._trades.values()]
-            with open("logs/trades_snapshot.json", "w") as f:
+            target = "logs/trades_snapshot.json"
+            tmp = target + ".tmp"
+            with open(tmp, "w") as f:
                 json.dump({"timestamp": time.time(), "trades": trades_data}, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, target)
         except Exception as e:
             logger.warning(f"Failed to persist trade snapshot: {e}")
 

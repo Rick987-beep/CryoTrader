@@ -12,6 +12,7 @@ Usage:
 import json
 import logging
 import os
+import shutil
 import signal
 import sys
 import time
@@ -49,6 +50,78 @@ STRATEGIES = [
     atm_straddle_index_move,
     # blueprint_strangle,
 ]
+
+# =============================================================================
+# Corruption Helpers
+# =============================================================================
+
+def _is_corrupt_file(path: str) -> bool:
+    """Check if a file is corrupted (e.g. filled with null bytes after power loss)."""
+    try:
+        with open(path, "rb") as f:
+            chunk = f.read(512)
+        if not chunk:
+            return True
+        # File filled with null bytes — OS allocated space but write buffer was lost
+        if chunk == b"\x00" * len(chunk):
+            return True
+        return False
+    except Exception:
+        return True
+
+
+def _quarantine_file(path: str) -> None:
+    """Move a corrupt file aside so it doesn't block startup forever."""
+    try:
+        ts = int(time.time())
+        quarantine = f"{path}.corrupt.{ts}"
+        shutil.move(path, quarantine)
+        logger.warning(f"Quarantined corrupt file: {path} → {quarantine}")
+    except Exception as e:
+        logger.error(f"Failed to quarantine {path}: {e}")
+
+
+def _check_exchange_positions(ctx):
+    """Query exchange for open positions.  Returns list or None on failure."""
+    try:
+        positions = ctx.account_manager.get_positions(force_refresh=True)
+        return [p for p in positions if float(p.get("qty", 0)) != 0]
+    except Exception as e:
+        logger.error(f"Cannot reach exchange to verify positions: {e}")
+        return None
+
+
+def _handle_corrupt_snapshot(ctx, snapshot_file: str) -> int:
+    """Recovery path when trades_snapshot.json is corrupt or unparseable.
+
+    Checks exchange for actual open positions, quarantines the corrupt
+    file, and returns 0 (start fresh) instead of None (crash-loop).
+    """
+    open_positions = _check_exchange_positions(ctx)
+
+    _quarantine_file(snapshot_file)
+
+    if open_positions is None:
+        # Can't reach exchange — still start fresh rather than crash-loop.
+        # Positions will be detected on the next successful poll.
+        logger.warning(
+            "Starting fresh despite exchange check failure — "
+            "monitor positions manually"
+        )
+    elif open_positions:
+        symbols = ", ".join(p.get("symbol", "?") for p in open_positions)
+        logger.critical(
+            f"Exchange has {len(open_positions)} open position(s) but "
+            f"trades_snapshot.json was corrupt. Starting fresh — "
+            f"MANUAL ATTENTION REQUIRED: {symbols}"
+        )
+    else:
+        logger.info(
+            "Exchange confirms NO open positions — safe to start fresh"
+        )
+
+    return 0
+
 
 # =============================================================================
 # Trade Recovery
@@ -94,12 +167,23 @@ def _recover_trades(ctx, runners):
         logger.warning("No trades snapshot found — nothing to recover")
         return 0
 
+    # ── Step 2a: Detect file corruption (null bytes from power loss) ────
+    if _is_corrupt_file(snapshot_file):
+        logger.critical(
+            "trades_snapshot.json is CORRUPT (null bytes / empty) — "
+            "likely caused by a hard reboot or power loss"
+        )
+        return _handle_corrupt_snapshot(ctx, snapshot_file)
+
     try:
         with open(snapshot_file, "r") as f:
             snapshot = json.load(f)
     except Exception as e:
-        logger.error(f"Failed to parse trades snapshot: {e}")
-        return None
+        logger.error(
+            f"Failed to parse trades snapshot: {e} — "
+            f"treating as corrupt and applying recovery logic"
+        )
+        return _handle_corrupt_snapshot(ctx, snapshot_file)
 
     trades_data = snapshot.get("trades", [])
     if not trades_data:

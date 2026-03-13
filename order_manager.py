@@ -623,6 +623,8 @@ class OrderManager:
             tmp_path = path + ".tmp"
             with open(tmp_path, "w") as f:
                 json.dump(snapshot, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(tmp_path, path)
         except Exception as e:
             logger.error(f"OrderManager: failed to persist snapshot: {e}")
@@ -655,11 +657,26 @@ class OrderManager:
             logger.error(f"OrderManager: failed to persist event: {e}")
 
     def load_snapshot(self) -> None:
-        """Load active_orders.json on startup for crash recovery."""
+        """Load active_orders.json on startup for crash recovery.
+
+        Handles file corruption gracefully (e.g. null bytes from power
+        loss): quarantines the corrupt file and starts with an empty
+        ledger rather than propagating the error.
+        """
         path = os.path.join(LOGS_DIR, "active_orders.json")
         if not os.path.exists(path):
             logger.info("OrderManager: no active_orders.json found, starting fresh")
             return
+
+        # Detect null-byte corruption (power-loss / hard reboot)
+        try:
+            with open(path, "rb") as f:
+                raw = f.read(512)
+            if not raw or raw == b"\x00" * len(raw):
+                self._quarantine(path, "null bytes")
+                return
+        except Exception:
+            pass
 
         try:
             with open(path, "r") as f:
@@ -673,7 +690,21 @@ class OrderManager:
                     self._active_by_key[key] = record.order_id
             logger.info(f"OrderManager: loaded {len(data)} orders from snapshot")
         except Exception as e:
-            logger.error(f"OrderManager: failed to load snapshot: {e}")
+            self._quarantine(path, str(e))
+
+    @staticmethod
+    def _quarantine(path: str, reason: str) -> None:
+        """Move a corrupt snapshot aside so it doesn't block future startups."""
+        try:
+            ts = int(time.time())
+            dest = f"{path}.corrupt.{ts}"
+            os.replace(path, dest)
+            logger.warning(
+                f"OrderManager: active_orders.json is corrupt ({reason}) "
+                f"— quarantined to {dest}, starting with empty ledger"
+            )
+        except Exception as qe:
+            logger.error(f"OrderManager: quarantine failed: {qe}")
 
     # ── Internal helpers ─────────────────────────────────────────────────
 

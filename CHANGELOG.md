@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-03-13
+
+### Fixed
+
+#### Critical: Crash Recovery & State File Resilience (RC1 + RC2)
+
+On March 12 at 21:52 CET the VPS suffered a hypervisor-level hard reboot.
+Two cascading issues kept the bot offline for 17+ hours:
+
+1. **State file corruption** — `trades_snapshot.json` and `active_orders.json`
+   were filled with `\x00` null bytes (OS had allocated disk space but pending
+   writes were still in the kernel buffer when power was lost).
+2. **Permanent crash loop** — On every restart `_recover_trades()` hit a JSON
+   parse error on the null-byte file, returned `None`, and `main.py` called
+   `sys.exit(1)`. NSSM restarted with exponential backoff, repeating forever.
+
+#### RC1 — Atomic / safe file writes
+- **`lifecycle_engine.py`** — `_persist_all_trades()` now writes to a `.tmp`
+  file, calls `f.flush()` + `os.fsync()`, then atomically renames via
+  `os.replace()`. Prevents half-written or buffered-only data from corrupting
+  `trades_snapshot.json` on power loss.
+- **`order_manager.py`** — `persist_snapshot()` already used temp + rename but
+  was missing `os.fsync()`. Added `f.flush()` + `os.fsync()` before the rename
+  so the data is guaranteed on disk before the file becomes visible.
+
+#### RC2 — Corrupted state no longer causes a permanent crash loop
+- **`main.py`** — Three new helpers: `_is_corrupt_file()` (detects null-byte
+  files), `_quarantine_file()` (moves corrupt files to `<name>.corrupt.<ts>`
+  for forensics), and `_handle_corrupt_snapshot()` (queries exchange for actual
+  open positions, quarantines the file, and returns 0 to start fresh instead of
+  returning None which triggered `sys.exit(1)`).
+- Both the null-byte detection path and the `json.load()` parse-error path now
+  route through `_handle_corrupt_snapshot()`, eliminating the crash loop.
+- If the exchange has open positions, a `CRITICAL` log with the symbols is
+  emitted so the operator knows to check manually — but the bot **runs** rather
+  than dying forever.
+- **`order_manager.py`** — `load_snapshot()` now detects null-byte corruption,
+  quarantines the file, and starts with an empty ledger (non-fatal). New
+  `_quarantine()` static method handles the move + log.
+
+### Files Changed
+- MODIFIED: `lifecycle_engine.py` (`_persist_all_trades` — atomic write)
+- MODIFIED: `order_manager.py` (`persist_snapshot` — fsync; `load_snapshot` — corruption recovery)
+- MODIFIED: `main.py` (corruption helpers, `_recover_trades` recovery path)
+
+---
+
 ## [1.0.3] - 2026-03-12
 
 ### Fixed
