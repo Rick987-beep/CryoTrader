@@ -25,10 +25,10 @@ import sys
 from datetime import datetime, timezone
 from typing import Optional
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
 
 OFFSETS = [0, 500, 1000, 1500, 2000, 2500, 3000]
-HYPOTHETICAL_MOVES = [0, 400, 800, 1200, 1600, 2000, 2500, 3000]
+HYPOTHETICAL_MOVES = [0, 500, 1000, 1500, 2000, 2500, 3000]
 
 
 def load_snapshot(date_str: str, label: str) -> dict:
@@ -40,12 +40,23 @@ def load_snapshot(date_str: str, label: str) -> dict:
         return json.load(f)
 
 
-def find_strike(strikes: list, target: float) -> dict | None:
+def find_strike(strikes: list, target: float):
     """Find the strike entry closest to target value."""
     if not strikes:
         return None
     return min(strikes, key=lambda s: abs(s["strike"] - target))
 
+def implied_spot(snapshot: dict) -> float:
+    """Derive implied spot from put-call parity at ATM: S = K + C - P."""
+    atm = snapshot["atm_strike"]
+    for s in snapshot["strikes"]:
+        if s["strike"] == atm:
+            c = (s.get("call") or {}).get("mark_price")
+            p = (s.get("put") or {}).get("mark_price")
+            if c and p:
+                return atm + (c - p)
+    # Fallback to reported (may be stale)
+    return snapshot["index_price"]
 
 def leg_price(leg) -> Optional[float]:
     """Extract mark price from a leg dict (the exchange's theoretical fair value)."""
@@ -132,9 +143,9 @@ def analyze(date_str: str, show_details: bool = False):
     entry = load_snapshot(date_str, "1200")
     exit_ = load_snapshot(date_str, "1900")
 
-    entry_index = entry["index_price"]
-    exit_index = exit_["index_price"]
-    realized_move = exit_index - entry_index
+    entry_spot = implied_spot(entry)
+    exit_spot = implied_spot(exit_)
+    realized_move = exit_spot - entry_spot
     abs_move = abs(realized_move)
     direction = "UP" if realized_move >= 0 else "DOWN"
 
@@ -143,8 +154,8 @@ def analyze(date_str: str, show_details: bool = False):
     print("=" * 80)
     print("  STRADDLE vs STRANGLE ANALYSIS")
     print(f"  Date: {date_str}   Expiry: {entry.get('expiry_date', '?')}")
-    print(f"  Entry (12:00 UTC): BTC index = ${entry_index:,.2f}   ATM strike = ${atm:,.0f}")
-    print(f"  Exit  (19:00 UTC): BTC index = ${exit_index:,.2f}")
+    print(f"  Entry (12:00 UTC): implied spot = ${entry_spot:,.2f}   ATM strike = ${atm:,.0f}")
+    print(f"  Exit  (19:00 UTC): implied spot = ${exit_spot:,.2f}")
     print(f"  Realized move: ${realized_move:+,.2f}  ({direction} ${abs_move:,.2f})")
     print("=" * 80)
 

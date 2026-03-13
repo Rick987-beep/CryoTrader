@@ -1,0 +1,2315 @@
+{
+  "generated": "2026-03-12T16:21:17.464000+00:00",
+  "weeks": 4,
+  "n_days": 21,
+  "date_range": [
+    "2026-02-12",
+    "2026-03-12"
+  ],
+  "windows": [
+    {
+      "entry_hour": 0,
+      "exit_hour": 1,
+      "window_hours": 1,
+      "mean_excursion": 435.43,
+      "median_excursion": 342.8,
+      "n": 20
+    },
+    {
+      "entry_hour": 0,
+      "exit_hour": 2,
+      "window_hours": 2,
+      "mean_excursion": 842.39,
+      "median_excursion": 599.6,
+      "n": 20
+    },
+    {
+      "entry_hour": 0,
+      "exit_hour": 3,
+      "window_hours": 3,
+      "mean_excursion": 974.02,
+      "median_excursion": 640.05,
+      "n": 20
+    },
+    {
+      "entry_hour": 0,
+      "exit_hour": 4,
+      "window_hours": 4,
+      "mean_excursion": 1055.72,
+      "median_excursion": 672.2,
+      "n": 20
+    },
+    {
+      "entry_hour": 0,
+      "exit_hour": 5,
+      "window_hours": 5,
+      "mean_excursion": 1115.95,
+      "median_excursion": 762.25,
+      "n": 20
+    },
+    {
+      "entry_hour": 0,
+      "exit_hour": 6,
+      "window_hours": 6,
+      "mean_excursion": 1213.31,
+      "median_excursion": 972.6,
+      "n": 20
+    },
+    {
+      "entry_hour": 0,
+      "exit_hour": 7,
+      "window_hours": 7,
+      "mean_excursion": 1227.03,
+      "median_excursion": 972.6,
+      "n": 20
+    },
+    {
+      "entry_hour": 0,
+      "exit_hour": 8,
+      "window_hours": 8,
+      "mean_excursion": 1266.81,
+      "median_excursion": 1004.2,
+      "n": 20
+    },
+    {
+      "entry_hour": 0,
+      "exit_hour": 9,
+      "window_hours": 9,
+      "mean_excursion": 1427.48,
+      "median_excursion": 1004.2,
+      "n": 20
+    },
+    {
+      "entry_hour": 0,
+      "exit_hour": 10,
+      "window_hours": 10,
+      "mean_excursion": 1545.07,
+      "median_excursion": 1004.2,
+      "n": 20
+    },
+    {
+      "entry_hour": 0,
+      "exit_hour": 11,
+      "window_hours": 11,
+      "mean_excursion": 1570.04,
+      "median_excursion": 1103.8,
+      "n": 20
+    },
+    {
+      "entry_hour": 0,
+      "exit_hour": 12,
+      "window_hours": 12,
+      "mean_excursion": 1617.3,
+      "median_excursion": 1258.7,
+      "n": 20
+    },
+    {
+      "entry_hour": 1,
+      "exit_hour": 2,
+      "window_hours": 1,
+      "mean_excursion": 677.21,
+      "median_excursion": 424.35,
+      "n": 20
+    },
+    {
+      "entry_hour": 1,
+      "exit_hour": 3,
+      "window_hours": 2,
+      "mean_excursion": 842.12,
+      "median_excursion": 606.25,
+      "n": 20
+    },
+    {
+      "entry_hour": 1,
+      "exit_hour": 4,
+      "window_hours": 3,
+      "mean_excursion": 919.46,
+      "median_excursion": 664.15,
+      "n": 20
+    },
+    {
+      "entry_hour": 1,
+      "exit_hour": 5,
+      "window_hours": 4,
+      "mean_excursion": 1000.94,
+      "median_excursion": 781.25,
+      "n": 20
+    },
+    {
+      "entry_hour": 1,
+      "exit_hour": 6,
+      "window_hours": 5,
+      "mean_excursion": 1101.31,
+      "median_excursion": 874.75,
+      "n": 20
+    },
+    {
+      "entry_hour": 1,
+      "exit_hour": 7,
+      "window_hours": 6,
+      "mean_excursion": 1124.66,
+      "median_excursion": 880.8,
+      "n": 20
+    },
+    {
+      "entry_hour": 1,
+      "exit_hour": 8,
+      "window_hours": 7,
+      "mean_excursion": 1207.08,
+      "median_excursion": 990.4,
+      "n": 20
+    },
+    {
+      "entry_hour": 1,
+      "exit_hour": 9,
+      "window_hours": 8,
+      "mean_excursion": 1367.75,
+      "median_excursion": 1003.65,
+      "n": 20
+    },
+    {
+      "entry_hour": 1,
+      "exit_hour": 10,
+      "window_hours": 9,
+      "mean_excursion": 1485.34,
+      "median_excursion": 1018.05,
+      "n": 20
+    },
+    {
+      "entry_hour": 1,
+      "exit_hour": 11,
+      "window_hours": 10,
+      "mean_excursion": 1501.96,
+      "median_excursion": 1132.25,
+      "n": 20
+    },
+    {
+      "entry_hour": 1,
+      "exit_hour": 12,
+      "window_hours": 11,
+      "mean_excursion": 1531.79,
+      "median_excursion": 1182.95,
+      "n": 20
+    },
+    {
+      "entry_hour": 1,
+      "exit_hour": 13,
+      "window_hours": 12,
+      "mean_excursion": 1590.51,
+      "median_excursion": 1255.1,
+      "n": 20
+    },
+    {
+      "entry_hour": 2,
+      "exit_hour": 3,
+      "window_hours": 1,
+      "mean_excursion": 451.48,
+      "median_excursion": 426.65,
+      "n": 20
+    },
+    {
+      "entry_hour": 2,
+      "exit_hour": 4,
+      "window_hours": 2,
+      "mean_excursion": 611.79,
+      "median_excursion": 561.1,
+      "n": 20
+    },
+    {
+      "entry_hour": 2,
+      "exit_hour": 5,
+      "window_hours": 3,
+      "mean_excursion": 746.81,
+      "median_excursion": 671.0,
+      "n": 20
+    },
+    {
+      "entry_hour": 2,
+      "exit_hour": 6,
+      "window_hours": 4,
+      "mean_excursion": 854.02,
+      "median_excursion": 761.65,
+      "n": 20
+    },
+    {
+      "entry_hour": 2,
+      "exit_hour": 7,
+      "window_hours": 5,
+      "mean_excursion": 903.74,
+      "median_excursion": 780.7,
+      "n": 20
+    },
+    {
+      "entry_hour": 2,
+      "exit_hour": 8,
+      "window_hours": 6,
+      "mean_excursion": 967.62,
+      "median_excursion": 918.9,
+      "n": 20
+    },
+    {
+      "entry_hour": 2,
+      "exit_hour": 9,
+      "window_hours": 7,
+      "mean_excursion": 1128.29,
+      "median_excursion": 931.95,
+      "n": 20
+    },
+    {
+      "entry_hour": 2,
+      "exit_hour": 10,
+      "window_hours": 8,
+      "mean_excursion": 1263.32,
+      "median_excursion": 970.55,
+      "n": 20
+    },
+    {
+      "entry_hour": 2,
+      "exit_hour": 11,
+      "window_hours": 9,
+      "mean_excursion": 1300.29,
+      "median_excursion": 1032.85,
+      "n": 20
+    },
+    {
+      "entry_hour": 2,
+      "exit_hour": 12,
+      "window_hours": 10,
+      "mean_excursion": 1356.65,
+      "median_excursion": 1075.7,
+      "n": 20
+    },
+    {
+      "entry_hour": 2,
+      "exit_hour": 13,
+      "window_hours": 11,
+      "mean_excursion": 1441.78,
+      "median_excursion": 1187.6,
+      "n": 20
+    },
+    {
+      "entry_hour": 2,
+      "exit_hour": 14,
+      "window_hours": 12,
+      "mean_excursion": 1593.99,
+      "median_excursion": 1240.45,
+      "n": 20
+    },
+    {
+      "entry_hour": 3,
+      "exit_hour": 4,
+      "window_hours": 1,
+      "mean_excursion": 455.31,
+      "median_excursion": 341.05,
+      "n": 20
+    },
+    {
+      "entry_hour": 3,
+      "exit_hour": 5,
+      "window_hours": 2,
+      "mean_excursion": 660.58,
+      "median_excursion": 582.9,
+      "n": 20
+    },
+    {
+      "entry_hour": 3,
+      "exit_hour": 6,
+      "window_hours": 3,
+      "mean_excursion": 781.8,
+      "median_excursion": 724.85,
+      "n": 20
+    },
+    {
+      "entry_hour": 3,
+      "exit_hour": 7,
+      "window_hours": 4,
+      "mean_excursion": 836.08,
+      "median_excursion": 782.3,
+      "n": 20
+    },
+    {
+      "entry_hour": 3,
+      "exit_hour": 8,
+      "window_hours": 5,
+      "mean_excursion": 898.19,
+      "median_excursion": 842.05,
+      "n": 20
+    },
+    {
+      "entry_hour": 3,
+      "exit_hour": 9,
+      "window_hours": 6,
+      "mean_excursion": 1046.26,
+      "median_excursion": 927.8,
+      "n": 20
+    },
+    {
+      "entry_hour": 3,
+      "exit_hour": 10,
+      "window_hours": 7,
+      "mean_excursion": 1191.85,
+      "median_excursion": 1010.9,
+      "n": 20
+    },
+    {
+      "entry_hour": 3,
+      "exit_hour": 11,
+      "window_hours": 8,
+      "mean_excursion": 1233.94,
+      "median_excursion": 1089.85,
+      "n": 20
+    },
+    {
+      "entry_hour": 3,
+      "exit_hour": 12,
+      "window_hours": 9,
+      "mean_excursion": 1275.43,
+      "median_excursion": 1117.8,
+      "n": 20
+    },
+    {
+      "entry_hour": 3,
+      "exit_hour": 13,
+      "window_hours": 10,
+      "mean_excursion": 1359.57,
+      "median_excursion": 1145.65,
+      "n": 20
+    },
+    {
+      "entry_hour": 3,
+      "exit_hour": 14,
+      "window_hours": 11,
+      "mean_excursion": 1526.92,
+      "median_excursion": 1216.9,
+      "n": 20
+    },
+    {
+      "entry_hour": 3,
+      "exit_hour": 15,
+      "window_hours": 12,
+      "mean_excursion": 1743.57,
+      "median_excursion": 1442.7,
+      "n": 20
+    },
+    {
+      "entry_hour": 4,
+      "exit_hour": 5,
+      "window_hours": 1,
+      "mean_excursion": 433.12,
+      "median_excursion": 319.6,
+      "n": 20
+    },
+    {
+      "entry_hour": 4,
+      "exit_hour": 6,
+      "window_hours": 2,
+      "mean_excursion": 584.02,
+      "median_excursion": 610.95,
+      "n": 20
+    },
+    {
+      "entry_hour": 4,
+      "exit_hour": 7,
+      "window_hours": 3,
+      "mean_excursion": 667.72,
+      "median_excursion": 651.95,
+      "n": 20
+    },
+    {
+      "entry_hour": 4,
+      "exit_hour": 8,
+      "window_hours": 4,
+      "mean_excursion": 791.5,
+      "median_excursion": 667.65,
+      "n": 20
+    },
+    {
+      "entry_hour": 4,
+      "exit_hour": 9,
+      "window_hours": 5,
+      "mean_excursion": 967.93,
+      "median_excursion": 742.65,
+      "n": 20
+    },
+    {
+      "entry_hour": 4,
+      "exit_hour": 10,
+      "window_hours": 6,
+      "mean_excursion": 1117.44,
+      "median_excursion": 859.95,
+      "n": 20
+    },
+    {
+      "entry_hour": 4,
+      "exit_hour": 11,
+      "window_hours": 7,
+      "mean_excursion": 1179.76,
+      "median_excursion": 950.95,
+      "n": 20
+    },
+    {
+      "entry_hour": 4,
+      "exit_hour": 12,
+      "window_hours": 8,
+      "mean_excursion": 1238.21,
+      "median_excursion": 950.95,
+      "n": 20
+    },
+    {
+      "entry_hour": 4,
+      "exit_hour": 13,
+      "window_hours": 9,
+      "mean_excursion": 1331.49,
+      "median_excursion": 1172.9,
+      "n": 20
+    },
+    {
+      "entry_hour": 4,
+      "exit_hour": 14,
+      "window_hours": 10,
+      "mean_excursion": 1547.54,
+      "median_excursion": 1410.65,
+      "n": 20
+    },
+    {
+      "entry_hour": 4,
+      "exit_hour": 15,
+      "window_hours": 11,
+      "mean_excursion": 1779.66,
+      "median_excursion": 1588.35,
+      "n": 20
+    },
+    {
+      "entry_hour": 4,
+      "exit_hour": 16,
+      "window_hours": 12,
+      "mean_excursion": 2030.23,
+      "median_excursion": 1786.95,
+      "n": 20
+    },
+    {
+      "entry_hour": 5,
+      "exit_hour": 6,
+      "window_hours": 1,
+      "mean_excursion": 475.86,
+      "median_excursion": 473.5,
+      "n": 20
+    },
+    {
+      "entry_hour": 5,
+      "exit_hour": 7,
+      "window_hours": 2,
+      "mean_excursion": 592.58,
+      "median_excursion": 622.45,
+      "n": 20
+    },
+    {
+      "entry_hour": 5,
+      "exit_hour": 8,
+      "window_hours": 3,
+      "mean_excursion": 745.16,
+      "median_excursion": 666.1,
+      "n": 20
+    },
+    {
+      "entry_hour": 5,
+      "exit_hour": 9,
+      "window_hours": 4,
+      "mean_excursion": 923.15,
+      "median_excursion": 754.55,
+      "n": 20
+    },
+    {
+      "entry_hour": 5,
+      "exit_hour": 10,
+      "window_hours": 5,
+      "mean_excursion": 1087.25,
+      "median_excursion": 774.4,
+      "n": 20
+    },
+    {
+      "entry_hour": 5,
+      "exit_hour": 11,
+      "window_hours": 6,
+      "mean_excursion": 1151.14,
+      "median_excursion": 925.15,
+      "n": 20
+    },
+    {
+      "entry_hour": 5,
+      "exit_hour": 12,
+      "window_hours": 7,
+      "mean_excursion": 1217.71,
+      "median_excursion": 1023.5,
+      "n": 20
+    },
+    {
+      "entry_hour": 5,
+      "exit_hour": 13,
+      "window_hours": 8,
+      "mean_excursion": 1276.52,
+      "median_excursion": 1061.5,
+      "n": 20
+    },
+    {
+      "entry_hour": 5,
+      "exit_hour": 14,
+      "window_hours": 9,
+      "mean_excursion": 1452.56,
+      "median_excursion": 1268.8,
+      "n": 20
+    },
+    {
+      "entry_hour": 5,
+      "exit_hour": 15,
+      "window_hours": 10,
+      "mean_excursion": 1709.16,
+      "median_excursion": 1510.8,
+      "n": 20
+    },
+    {
+      "entry_hour": 5,
+      "exit_hour": 16,
+      "window_hours": 11,
+      "mean_excursion": 1986.96,
+      "median_excursion": 1799.85,
+      "n": 20
+    },
+    {
+      "entry_hour": 5,
+      "exit_hour": 17,
+      "window_hours": 12,
+      "mean_excursion": 2109.12,
+      "median_excursion": 1937.55,
+      "n": 20
+    },
+    {
+      "entry_hour": 6,
+      "exit_hour": 7,
+      "window_hours": 1,
+      "mean_excursion": 361.67,
+      "median_excursion": 335.55,
+      "n": 20
+    },
+    {
+      "entry_hour": 6,
+      "exit_hour": 8,
+      "window_hours": 2,
+      "mean_excursion": 579.3,
+      "median_excursion": 487.45,
+      "n": 20
+    },
+    {
+      "entry_hour": 6,
+      "exit_hour": 9,
+      "window_hours": 3,
+      "mean_excursion": 791.93,
+      "median_excursion": 658.5,
+      "n": 20
+    },
+    {
+      "entry_hour": 6,
+      "exit_hour": 10,
+      "window_hours": 4,
+      "mean_excursion": 954.73,
+      "median_excursion": 798.15,
+      "n": 20
+    },
+    {
+      "entry_hour": 6,
+      "exit_hour": 11,
+      "window_hours": 5,
+      "mean_excursion": 1047.03,
+      "median_excursion": 884.9,
+      "n": 20
+    },
+    {
+      "entry_hour": 6,
+      "exit_hour": 12,
+      "window_hours": 6,
+      "mean_excursion": 1096.96,
+      "median_excursion": 931.0,
+      "n": 20
+    },
+    {
+      "entry_hour": 6,
+      "exit_hour": 13,
+      "window_hours": 7,
+      "mean_excursion": 1181.84,
+      "median_excursion": 1104.7,
+      "n": 20
+    },
+    {
+      "entry_hour": 6,
+      "exit_hour": 14,
+      "window_hours": 8,
+      "mean_excursion": 1430.52,
+      "median_excursion": 1364.65,
+      "n": 20
+    },
+    {
+      "entry_hour": 6,
+      "exit_hour": 15,
+      "window_hours": 9,
+      "mean_excursion": 1679.91,
+      "median_excursion": 1552.1,
+      "n": 20
+    },
+    {
+      "entry_hour": 6,
+      "exit_hour": 16,
+      "window_hours": 10,
+      "mean_excursion": 1938.93,
+      "median_excursion": 1648.4,
+      "n": 20
+    },
+    {
+      "entry_hour": 6,
+      "exit_hour": 17,
+      "window_hours": 11,
+      "mean_excursion": 2075.16,
+      "median_excursion": 1691.25,
+      "n": 20
+    },
+    {
+      "entry_hour": 6,
+      "exit_hour": 18,
+      "window_hours": 12,
+      "mean_excursion": 2219.93,
+      "median_excursion": 1809.8,
+      "n": 19
+    },
+    {
+      "entry_hour": 7,
+      "exit_hour": 8,
+      "window_hours": 1,
+      "mean_excursion": 408.12,
+      "median_excursion": 339.45,
+      "n": 20
+    },
+    {
+      "entry_hour": 7,
+      "exit_hour": 9,
+      "window_hours": 2,
+      "mean_excursion": 661.92,
+      "median_excursion": 526.6,
+      "n": 20
+    },
+    {
+      "entry_hour": 7,
+      "exit_hour": 10,
+      "window_hours": 3,
+      "mean_excursion": 872.18,
+      "median_excursion": 646.1,
+      "n": 20
+    },
+    {
+      "entry_hour": 7,
+      "exit_hour": 11,
+      "window_hours": 4,
+      "mean_excursion": 949.03,
+      "median_excursion": 738.55,
+      "n": 20
+    },
+    {
+      "entry_hour": 7,
+      "exit_hour": 12,
+      "window_hours": 5,
+      "mean_excursion": 1036.16,
+      "median_excursion": 810.3,
+      "n": 20
+    },
+    {
+      "entry_hour": 7,
+      "exit_hour": 13,
+      "window_hours": 6,
+      "mean_excursion": 1148.65,
+      "median_excursion": 961.35,
+      "n": 20
+    },
+    {
+      "entry_hour": 7,
+      "exit_hour": 14,
+      "window_hours": 7,
+      "mean_excursion": 1376.0,
+      "median_excursion": 1340.6,
+      "n": 20
+    },
+    {
+      "entry_hour": 7,
+      "exit_hour": 15,
+      "window_hours": 8,
+      "mean_excursion": 1634.08,
+      "median_excursion": 1574.2,
+      "n": 20
+    },
+    {
+      "entry_hour": 7,
+      "exit_hour": 16,
+      "window_hours": 9,
+      "mean_excursion": 1956.63,
+      "median_excursion": 1739.4,
+      "n": 20
+    },
+    {
+      "entry_hour": 7,
+      "exit_hour": 17,
+      "window_hours": 10,
+      "mean_excursion": 2092.86,
+      "median_excursion": 1774.85,
+      "n": 20
+    },
+    {
+      "entry_hour": 7,
+      "exit_hour": 18,
+      "window_hours": 11,
+      "mean_excursion": 2279.64,
+      "median_excursion": 1868.5,
+      "n": 19
+    },
+    {
+      "entry_hour": 7,
+      "exit_hour": 19,
+      "window_hours": 12,
+      "mean_excursion": 2344.16,
+      "median_excursion": 1868.5,
+      "n": 19
+    },
+    {
+      "entry_hour": 8,
+      "exit_hour": 9,
+      "window_hours": 1,
+      "mean_excursion": 475.29,
+      "median_excursion": 374.6,
+      "n": 20
+    },
+    {
+      "entry_hour": 8,
+      "exit_hour": 10,
+      "window_hours": 2,
+      "mean_excursion": 754.22,
+      "median_excursion": 633.95,
+      "n": 20
+    },
+    {
+      "entry_hour": 8,
+      "exit_hour": 11,
+      "window_hours": 3,
+      "mean_excursion": 857.58,
+      "median_excursion": 712.35,
+      "n": 20
+    },
+    {
+      "entry_hour": 8,
+      "exit_hour": 12,
+      "window_hours": 4,
+      "mean_excursion": 973.46,
+      "median_excursion": 875.75,
+      "n": 20
+    },
+    {
+      "entry_hour": 8,
+      "exit_hour": 13,
+      "window_hours": 5,
+      "mean_excursion": 1096.05,
+      "median_excursion": 955.2,
+      "n": 20
+    },
+    {
+      "entry_hour": 8,
+      "exit_hour": 14,
+      "window_hours": 6,
+      "mean_excursion": 1352.94,
+      "median_excursion": 1427.6,
+      "n": 20
+    },
+    {
+      "entry_hour": 8,
+      "exit_hour": 15,
+      "window_hours": 7,
+      "mean_excursion": 1606.81,
+      "median_excursion": 1536.05,
+      "n": 20
+    },
+    {
+      "entry_hour": 8,
+      "exit_hour": 16,
+      "window_hours": 8,
+      "mean_excursion": 1886.5,
+      "median_excursion": 1571.55,
+      "n": 20
+    },
+    {
+      "entry_hour": 8,
+      "exit_hour": 17,
+      "window_hours": 9,
+      "mean_excursion": 2008.68,
+      "median_excursion": 1571.55,
+      "n": 20
+    },
+    {
+      "entry_hour": 8,
+      "exit_hour": 18,
+      "window_hours": 10,
+      "mean_excursion": 2216.02,
+      "median_excursion": 1765.4,
+      "n": 19
+    },
+    {
+      "entry_hour": 8,
+      "exit_hour": 19,
+      "window_hours": 11,
+      "mean_excursion": 2280.54,
+      "median_excursion": 1803.9,
+      "n": 19
+    },
+    {
+      "entry_hour": 8,
+      "exit_hour": 20,
+      "window_hours": 12,
+      "mean_excursion": 2332.47,
+      "median_excursion": 1865.7,
+      "n": 19
+    },
+    {
+      "entry_hour": 9,
+      "exit_hour": 10,
+      "window_hours": 1,
+      "mean_excursion": 479.8,
+      "median_excursion": 477.65,
+      "n": 20
+    },
+    {
+      "entry_hour": 9,
+      "exit_hour": 11,
+      "window_hours": 2,
+      "mean_excursion": 598.53,
+      "median_excursion": 490.3,
+      "n": 20
+    },
+    {
+      "entry_hour": 9,
+      "exit_hour": 12,
+      "window_hours": 3,
+      "mean_excursion": 731.49,
+      "median_excursion": 605.65,
+      "n": 20
+    },
+    {
+      "entry_hour": 9,
+      "exit_hour": 13,
+      "window_hours": 4,
+      "mean_excursion": 857.04,
+      "median_excursion": 748.65,
+      "n": 20
+    },
+    {
+      "entry_hour": 9,
+      "exit_hour": 14,
+      "window_hours": 5,
+      "mean_excursion": 1156.37,
+      "median_excursion": 1060.05,
+      "n": 20
+    },
+    {
+      "entry_hour": 9,
+      "exit_hour": 15,
+      "window_hours": 6,
+      "mean_excursion": 1391.11,
+      "median_excursion": 1409.05,
+      "n": 20
+    },
+    {
+      "entry_hour": 9,
+      "exit_hour": 16,
+      "window_hours": 7,
+      "mean_excursion": 1670.5,
+      "median_excursion": 1454.7,
+      "n": 20
+    },
+    {
+      "entry_hour": 9,
+      "exit_hour": 17,
+      "window_hours": 8,
+      "mean_excursion": 1836.39,
+      "median_excursion": 1513.2,
+      "n": 20
+    },
+    {
+      "entry_hour": 9,
+      "exit_hour": 18,
+      "window_hours": 9,
+      "mean_excursion": 2022.64,
+      "median_excursion": 1668.6,
+      "n": 19
+    },
+    {
+      "entry_hour": 9,
+      "exit_hour": 19,
+      "window_hours": 10,
+      "mean_excursion": 2087.16,
+      "median_excursion": 1676.7,
+      "n": 19
+    },
+    {
+      "entry_hour": 9,
+      "exit_hour": 20,
+      "window_hours": 11,
+      "mean_excursion": 2139.09,
+      "median_excursion": 1694.8,
+      "n": 19
+    },
+    {
+      "entry_hour": 9,
+      "exit_hour": 21,
+      "window_hours": 12,
+      "mean_excursion": 2149.09,
+      "median_excursion": 1725.6,
+      "n": 19
+    },
+    {
+      "entry_hour": 10,
+      "exit_hour": 11,
+      "window_hours": 1,
+      "mean_excursion": 373.67,
+      "median_excursion": 344.0,
+      "n": 20
+    },
+    {
+      "entry_hour": 10,
+      "exit_hour": 12,
+      "window_hours": 2,
+      "mean_excursion": 586.26,
+      "median_excursion": 522.8,
+      "n": 20
+    },
+    {
+      "entry_hour": 10,
+      "exit_hour": 13,
+      "window_hours": 3,
+      "mean_excursion": 757.05,
+      "median_excursion": 739.05,
+      "n": 20
+    },
+    {
+      "entry_hour": 10,
+      "exit_hour": 14,
+      "window_hours": 4,
+      "mean_excursion": 1087.79,
+      "median_excursion": 1108.2,
+      "n": 20
+    },
+    {
+      "entry_hour": 10,
+      "exit_hour": 15,
+      "window_hours": 5,
+      "mean_excursion": 1350.85,
+      "median_excursion": 1351.4,
+      "n": 20
+    },
+    {
+      "entry_hour": 10,
+      "exit_hour": 16,
+      "window_hours": 6,
+      "mean_excursion": 1684.04,
+      "median_excursion": 1660.8,
+      "n": 20
+    },
+    {
+      "entry_hour": 10,
+      "exit_hour": 17,
+      "window_hours": 7,
+      "mean_excursion": 1884.57,
+      "median_excursion": 1787.95,
+      "n": 20
+    },
+    {
+      "entry_hour": 10,
+      "exit_hour": 18,
+      "window_hours": 8,
+      "mean_excursion": 2099.74,
+      "median_excursion": 1950.3,
+      "n": 19
+    },
+    {
+      "entry_hour": 10,
+      "exit_hour": 19,
+      "window_hours": 9,
+      "mean_excursion": 2164.26,
+      "median_excursion": 1998.8,
+      "n": 19
+    },
+    {
+      "entry_hour": 10,
+      "exit_hour": 20,
+      "window_hours": 10,
+      "mean_excursion": 2216.19,
+      "median_excursion": 2091.0,
+      "n": 19
+    },
+    {
+      "entry_hour": 10,
+      "exit_hour": 21,
+      "window_hours": 11,
+      "mean_excursion": 2226.19,
+      "median_excursion": 2091.0,
+      "n": 19
+    },
+    {
+      "entry_hour": 10,
+      "exit_hour": 22,
+      "window_hours": 12,
+      "mean_excursion": 2250.81,
+      "median_excursion": 2091.0,
+      "n": 19
+    },
+    {
+      "entry_hour": 11,
+      "exit_hour": 12,
+      "window_hours": 1,
+      "mean_excursion": 380.73,
+      "median_excursion": 330.95,
+      "n": 20
+    },
+    {
+      "entry_hour": 11,
+      "exit_hour": 13,
+      "window_hours": 2,
+      "mean_excursion": 635.82,
+      "median_excursion": 662.35,
+      "n": 20
+    },
+    {
+      "entry_hour": 11,
+      "exit_hour": 14,
+      "window_hours": 3,
+      "mean_excursion": 1016.48,
+      "median_excursion": 1010.85,
+      "n": 20
+    },
+    {
+      "entry_hour": 11,
+      "exit_hour": 15,
+      "window_hours": 4,
+      "mean_excursion": 1299.29,
+      "median_excursion": 1193.95,
+      "n": 20
+    },
+    {
+      "entry_hour": 11,
+      "exit_hour": 16,
+      "window_hours": 5,
+      "mean_excursion": 1620.95,
+      "median_excursion": 1506.85,
+      "n": 20
+    },
+    {
+      "entry_hour": 11,
+      "exit_hour": 17,
+      "window_hours": 6,
+      "mean_excursion": 1817.82,
+      "median_excursion": 1532.4,
+      "n": 20
+    },
+    {
+      "entry_hour": 11,
+      "exit_hour": 18,
+      "window_hours": 7,
+      "mean_excursion": 2017.52,
+      "median_excursion": 1810.0,
+      "n": 19
+    },
+    {
+      "entry_hour": 11,
+      "exit_hour": 19,
+      "window_hours": 8,
+      "mean_excursion": 2082.04,
+      "median_excursion": 1810.0,
+      "n": 19
+    },
+    {
+      "entry_hour": 11,
+      "exit_hour": 20,
+      "window_hours": 9,
+      "mean_excursion": 2133.97,
+      "median_excursion": 1926.7,
+      "n": 19
+    },
+    {
+      "entry_hour": 11,
+      "exit_hour": 21,
+      "window_hours": 10,
+      "mean_excursion": 2143.97,
+      "median_excursion": 1926.7,
+      "n": 19
+    },
+    {
+      "entry_hour": 11,
+      "exit_hour": 22,
+      "window_hours": 11,
+      "mean_excursion": 2168.59,
+      "median_excursion": 1926.7,
+      "n": 19
+    },
+    {
+      "entry_hour": 11,
+      "exit_hour": 23,
+      "window_hours": 12,
+      "mean_excursion": 2179.35,
+      "median_excursion": 1926.7,
+      "n": 19
+    },
+    {
+      "entry_hour": 12,
+      "exit_hour": 0,
+      "window_hours": 12,
+      "mean_excursion": 2020.27,
+      "median_excursion": 1774.7,
+      "n": 19
+    },
+    {
+      "entry_hour": 12,
+      "exit_hour": 13,
+      "window_hours": 1,
+      "mean_excursion": 455.73,
+      "median_excursion": 349.85,
+      "n": 20
+    },
+    {
+      "entry_hour": 12,
+      "exit_hour": 14,
+      "window_hours": 2,
+      "mean_excursion": 840.78,
+      "median_excursion": 782.1,
+      "n": 20
+    },
+    {
+      "entry_hour": 12,
+      "exit_hour": 15,
+      "window_hours": 3,
+      "mean_excursion": 1144.67,
+      "median_excursion": 1042.4,
+      "n": 20
+    },
+    {
+      "entry_hour": 12,
+      "exit_hour": 16,
+      "window_hours": 4,
+      "mean_excursion": 1478.58,
+      "median_excursion": 1339.9,
+      "n": 20
+    },
+    {
+      "entry_hour": 12,
+      "exit_hour": 17,
+      "window_hours": 5,
+      "mean_excursion": 1680.71,
+      "median_excursion": 1541.3,
+      "n": 20
+    },
+    {
+      "entry_hour": 12,
+      "exit_hour": 18,
+      "window_hours": 6,
+      "mean_excursion": 1872.35,
+      "median_excursion": 1725.8,
+      "n": 19
+    },
+    {
+      "entry_hour": 12,
+      "exit_hour": 19,
+      "window_hours": 7,
+      "mean_excursion": 1920.48,
+      "median_excursion": 1725.8,
+      "n": 19
+    },
+    {
+      "entry_hour": 12,
+      "exit_hour": 20,
+      "window_hours": 8,
+      "mean_excursion": 1972.41,
+      "median_excursion": 1774.7,
+      "n": 19
+    },
+    {
+      "entry_hour": 12,
+      "exit_hour": 21,
+      "window_hours": 9,
+      "mean_excursion": 1982.41,
+      "median_excursion": 1774.7,
+      "n": 19
+    },
+    {
+      "entry_hour": 12,
+      "exit_hour": 22,
+      "window_hours": 10,
+      "mean_excursion": 2007.03,
+      "median_excursion": 1774.7,
+      "n": 19
+    },
+    {
+      "entry_hour": 12,
+      "exit_hour": 23,
+      "window_hours": 11,
+      "mean_excursion": 2017.78,
+      "median_excursion": 1774.7,
+      "n": 19
+    },
+    {
+      "entry_hour": 13,
+      "exit_hour": 0,
+      "window_hours": 11,
+      "mean_excursion": 2011.84,
+      "median_excursion": 1783.2,
+      "n": 19
+    },
+    {
+      "entry_hour": 13,
+      "exit_hour": 1,
+      "window_hours": 12,
+      "mean_excursion": 2107.17,
+      "median_excursion": 1783.2,
+      "n": 15
+    },
+    {
+      "entry_hour": 13,
+      "exit_hour": 14,
+      "window_hours": 1,
+      "mean_excursion": 722.75,
+      "median_excursion": 670.25,
+      "n": 20
+    },
+    {
+      "entry_hour": 13,
+      "exit_hour": 15,
+      "window_hours": 2,
+      "mean_excursion": 1117.87,
+      "median_excursion": 1067.8,
+      "n": 20
+    },
+    {
+      "entry_hour": 13,
+      "exit_hour": 16,
+      "window_hours": 3,
+      "mean_excursion": 1501.55,
+      "median_excursion": 1315.15,
+      "n": 20
+    },
+    {
+      "entry_hour": 13,
+      "exit_hour": 17,
+      "window_hours": 4,
+      "mean_excursion": 1664.62,
+      "median_excursion": 1532.45,
+      "n": 20
+    },
+    {
+      "entry_hour": 13,
+      "exit_hour": 18,
+      "window_hours": 5,
+      "mean_excursion": 1857.51,
+      "median_excursion": 1678.9,
+      "n": 19
+    },
+    {
+      "entry_hour": 13,
+      "exit_hour": 19,
+      "window_hours": 6,
+      "mean_excursion": 1914.54,
+      "median_excursion": 1678.9,
+      "n": 19
+    },
+    {
+      "entry_hour": 13,
+      "exit_hour": 20,
+      "window_hours": 7,
+      "mean_excursion": 1966.47,
+      "median_excursion": 1783.2,
+      "n": 19
+    },
+    {
+      "entry_hour": 13,
+      "exit_hour": 21,
+      "window_hours": 8,
+      "mean_excursion": 1976.47,
+      "median_excursion": 1783.2,
+      "n": 19
+    },
+    {
+      "entry_hour": 13,
+      "exit_hour": 22,
+      "window_hours": 9,
+      "mean_excursion": 2001.08,
+      "median_excursion": 1783.2,
+      "n": 19
+    },
+    {
+      "entry_hour": 13,
+      "exit_hour": 23,
+      "window_hours": 10,
+      "mean_excursion": 2011.84,
+      "median_excursion": 1783.2,
+      "n": 19
+    },
+    {
+      "entry_hour": 14,
+      "exit_hour": 0,
+      "window_hours": 10,
+      "mean_excursion": 1897.12,
+      "median_excursion": 1517.3,
+      "n": 19
+    },
+    {
+      "entry_hour": 14,
+      "exit_hour": 1,
+      "window_hours": 11,
+      "mean_excursion": 1989.91,
+      "median_excursion": 1822.7,
+      "n": 15
+    },
+    {
+      "entry_hour": 14,
+      "exit_hour": 2,
+      "window_hours": 12,
+      "mean_excursion": 2144.69,
+      "median_excursion": 1864.4,
+      "n": 15
+    },
+    {
+      "entry_hour": 14,
+      "exit_hour": 15,
+      "window_hours": 1,
+      "mean_excursion": 843.29,
+      "median_excursion": 763.05,
+      "n": 20
+    },
+    {
+      "entry_hour": 14,
+      "exit_hour": 16,
+      "window_hours": 2,
+      "mean_excursion": 1305.02,
+      "median_excursion": 1124.9,
+      "n": 20
+    },
+    {
+      "entry_hour": 14,
+      "exit_hour": 17,
+      "window_hours": 3,
+      "mean_excursion": 1517.1,
+      "median_excursion": 1365.45,
+      "n": 20
+    },
+    {
+      "entry_hour": 14,
+      "exit_hour": 18,
+      "window_hours": 4,
+      "mean_excursion": 1754.79,
+      "median_excursion": 1517.3,
+      "n": 19
+    },
+    {
+      "entry_hour": 14,
+      "exit_hour": 19,
+      "window_hours": 5,
+      "mean_excursion": 1793.66,
+      "median_excursion": 1517.3,
+      "n": 19
+    },
+    {
+      "entry_hour": 14,
+      "exit_hour": 20,
+      "window_hours": 6,
+      "mean_excursion": 1845.42,
+      "median_excursion": 1517.3,
+      "n": 19
+    },
+    {
+      "entry_hour": 14,
+      "exit_hour": 21,
+      "window_hours": 7,
+      "mean_excursion": 1855.42,
+      "median_excursion": 1517.3,
+      "n": 19
+    },
+    {
+      "entry_hour": 14,
+      "exit_hour": 22,
+      "window_hours": 8,
+      "mean_excursion": 1880.04,
+      "median_excursion": 1517.3,
+      "n": 19
+    },
+    {
+      "entry_hour": 14,
+      "exit_hour": 23,
+      "window_hours": 9,
+      "mean_excursion": 1891.64,
+      "median_excursion": 1517.3,
+      "n": 19
+    },
+    {
+      "entry_hour": 15,
+      "exit_hour": 0,
+      "window_hours": 9,
+      "mean_excursion": 1610.66,
+      "median_excursion": 1364.3,
+      "n": 19
+    },
+    {
+      "entry_hour": 15,
+      "exit_hour": 1,
+      "window_hours": 10,
+      "mean_excursion": 1752.39,
+      "median_excursion": 1373.3,
+      "n": 15
+    },
+    {
+      "entry_hour": 15,
+      "exit_hour": 2,
+      "window_hours": 11,
+      "mean_excursion": 1907.17,
+      "median_excursion": 2047.7,
+      "n": 15
+    },
+    {
+      "entry_hour": 15,
+      "exit_hour": 3,
+      "window_hours": 12,
+      "mean_excursion": 1971.71,
+      "median_excursion": 2047.7,
+      "n": 15
+    },
+    {
+      "entry_hour": 15,
+      "exit_hour": 16,
+      "window_hours": 1,
+      "mean_excursion": 972.82,
+      "median_excursion": 923.6,
+      "n": 20
+    },
+    {
+      "entry_hour": 15,
+      "exit_hour": 17,
+      "window_hours": 2,
+      "mean_excursion": 1222.09,
+      "median_excursion": 1096.65,
+      "n": 20
+    },
+    {
+      "entry_hour": 15,
+      "exit_hour": 18,
+      "window_hours": 3,
+      "mean_excursion": 1408.04,
+      "median_excursion": 1145.6,
+      "n": 19
+    },
+    {
+      "entry_hour": 15,
+      "exit_hour": 19,
+      "window_hours": 4,
+      "mean_excursion": 1483.31,
+      "median_excursion": 1197.8,
+      "n": 19
+    },
+    {
+      "entry_hour": 15,
+      "exit_hour": 20,
+      "window_hours": 5,
+      "mean_excursion": 1543.17,
+      "median_excursion": 1364.3,
+      "n": 19
+    },
+    {
+      "entry_hour": 15,
+      "exit_hour": 21,
+      "window_hours": 6,
+      "mean_excursion": 1553.17,
+      "median_excursion": 1364.3,
+      "n": 19
+    },
+    {
+      "entry_hour": 15,
+      "exit_hour": 22,
+      "window_hours": 7,
+      "mean_excursion": 1588.44,
+      "median_excursion": 1364.3,
+      "n": 19
+    },
+    {
+      "entry_hour": 15,
+      "exit_hour": 23,
+      "window_hours": 8,
+      "mean_excursion": 1605.18,
+      "median_excursion": 1364.3,
+      "n": 19
+    },
+    {
+      "entry_hour": 16,
+      "exit_hour": 0,
+      "window_hours": 8,
+      "mean_excursion": 1185.97,
+      "median_excursion": 1010.9,
+      "n": 19
+    },
+    {
+      "entry_hour": 16,
+      "exit_hour": 1,
+      "window_hours": 9,
+      "mean_excursion": 1298.23,
+      "median_excursion": 1099.0,
+      "n": 15
+    },
+    {
+      "entry_hour": 16,
+      "exit_hour": 2,
+      "window_hours": 10,
+      "mean_excursion": 1453.01,
+      "median_excursion": 1272.1,
+      "n": 15
+    },
+    {
+      "entry_hour": 16,
+      "exit_hour": 3,
+      "window_hours": 11,
+      "mean_excursion": 1536.51,
+      "median_excursion": 1280.4,
+      "n": 15
+    },
+    {
+      "entry_hour": 16,
+      "exit_hour": 4,
+      "window_hours": 12,
+      "mean_excursion": 1541.29,
+      "median_excursion": 1280.4,
+      "n": 15
+    },
+    {
+      "entry_hour": 16,
+      "exit_hour": 17,
+      "window_hours": 1,
+      "mean_excursion": 655.71,
+      "median_excursion": 626.1,
+      "n": 20
+    },
+    {
+      "entry_hour": 16,
+      "exit_hour": 18,
+      "window_hours": 2,
+      "mean_excursion": 898.89,
+      "median_excursion": 831.8,
+      "n": 19
+    },
+    {
+      "entry_hour": 16,
+      "exit_hour": 19,
+      "window_hours": 3,
+      "mean_excursion": 1025.57,
+      "median_excursion": 891.3,
+      "n": 19
+    },
+    {
+      "entry_hour": 16,
+      "exit_hour": 20,
+      "window_hours": 4,
+      "mean_excursion": 1073.53,
+      "median_excursion": 891.3,
+      "n": 19
+    },
+    {
+      "entry_hour": 16,
+      "exit_hour": 21,
+      "window_hours": 5,
+      "mean_excursion": 1100.49,
+      "median_excursion": 992.5,
+      "n": 19
+    },
+    {
+      "entry_hour": 16,
+      "exit_hour": 22,
+      "window_hours": 6,
+      "mean_excursion": 1155.99,
+      "median_excursion": 992.5,
+      "n": 19
+    },
+    {
+      "entry_hour": 16,
+      "exit_hour": 23,
+      "window_hours": 7,
+      "mean_excursion": 1171.89,
+      "median_excursion": 998.9,
+      "n": 19
+    },
+    {
+      "entry_hour": 17,
+      "exit_hour": 0,
+      "window_hours": 7,
+      "mean_excursion": 944.36,
+      "median_excursion": 797.9,
+      "n": 20
+    },
+    {
+      "entry_hour": 17,
+      "exit_hour": 1,
+      "window_hours": 8,
+      "mean_excursion": 1043.53,
+      "median_excursion": 921.8,
+      "n": 16
+    },
+    {
+      "entry_hour": 17,
+      "exit_hour": 2,
+      "window_hours": 9,
+      "mean_excursion": 1195.73,
+      "median_excursion": 1073.55,
+      "n": 16
+    },
+    {
+      "entry_hour": 17,
+      "exit_hour": 3,
+      "window_hours": 10,
+      "mean_excursion": 1330.16,
+      "median_excursion": 1274.7,
+      "n": 16
+    },
+    {
+      "entry_hour": 17,
+      "exit_hour": 4,
+      "window_hours": 11,
+      "mean_excursion": 1339.81,
+      "median_excursion": 1274.7,
+      "n": 16
+    },
+    {
+      "entry_hour": 17,
+      "exit_hour": 5,
+      "window_hours": 12,
+      "mean_excursion": 1404.7,
+      "median_excursion": 1366.75,
+      "n": 16
+    },
+    {
+      "entry_hour": 17,
+      "exit_hour": 18,
+      "window_hours": 1,
+      "mean_excursion": 592.32,
+      "median_excursion": 614.85,
+      "n": 20
+    },
+    {
+      "entry_hour": 17,
+      "exit_hour": 19,
+      "window_hours": 2,
+      "mean_excursion": 749.62,
+      "median_excursion": 725.3,
+      "n": 20
+    },
+    {
+      "entry_hour": 17,
+      "exit_hour": 20,
+      "window_hours": 3,
+      "mean_excursion": 841.09,
+      "median_excursion": 747.3,
+      "n": 20
+    },
+    {
+      "entry_hour": 17,
+      "exit_hour": 21,
+      "window_hours": 4,
+      "mean_excursion": 866.71,
+      "median_excursion": 747.3,
+      "n": 20
+    },
+    {
+      "entry_hour": 17,
+      "exit_hour": 22,
+      "window_hours": 5,
+      "mean_excursion": 919.44,
+      "median_excursion": 776.45,
+      "n": 20
+    },
+    {
+      "entry_hour": 17,
+      "exit_hour": 23,
+      "window_hours": 6,
+      "mean_excursion": 934.54,
+      "median_excursion": 776.45,
+      "n": 20
+    },
+    {
+      "entry_hour": 18,
+      "exit_hour": 0,
+      "window_hours": 6,
+      "mean_excursion": 880.33,
+      "median_excursion": 881.6,
+      "n": 20
+    },
+    {
+      "entry_hour": 18,
+      "exit_hour": 1,
+      "window_hours": 7,
+      "mean_excursion": 981.34,
+      "median_excursion": 969.8,
+      "n": 16
+    },
+    {
+      "entry_hour": 18,
+      "exit_hour": 2,
+      "window_hours": 8,
+      "mean_excursion": 1138.88,
+      "median_excursion": 1104.2,
+      "n": 16
+    },
+    {
+      "entry_hour": 18,
+      "exit_hour": 3,
+      "window_hours": 9,
+      "mean_excursion": 1282.26,
+      "median_excursion": 1320.95,
+      "n": 16
+    },
+    {
+      "entry_hour": 18,
+      "exit_hour": 4,
+      "window_hours": 10,
+      "mean_excursion": 1309.79,
+      "median_excursion": 1320.95,
+      "n": 16
+    },
+    {
+      "entry_hour": 18,
+      "exit_hour": 5,
+      "window_hours": 11,
+      "mean_excursion": 1366.71,
+      "median_excursion": 1351.95,
+      "n": 16
+    },
+    {
+      "entry_hour": 18,
+      "exit_hour": 6,
+      "window_hours": 12,
+      "mean_excursion": 1432.38,
+      "median_excursion": 1383.4,
+      "n": 16
+    },
+    {
+      "entry_hour": 18,
+      "exit_hour": 19,
+      "window_hours": 1,
+      "mean_excursion": 555.17,
+      "median_excursion": 481.4,
+      "n": 20
+    },
+    {
+      "entry_hour": 18,
+      "exit_hour": 20,
+      "window_hours": 2,
+      "mean_excursion": 734.41,
+      "median_excursion": 722.1,
+      "n": 20
+    },
+    {
+      "entry_hour": 18,
+      "exit_hour": 21,
+      "window_hours": 3,
+      "mean_excursion": 760.03,
+      "median_excursion": 741.65,
+      "n": 20
+    },
+    {
+      "entry_hour": 18,
+      "exit_hour": 22,
+      "window_hours": 4,
+      "mean_excursion": 817.04,
+      "median_excursion": 849.95,
+      "n": 20
+    },
+    {
+      "entry_hour": 18,
+      "exit_hour": 23,
+      "window_hours": 5,
+      "mean_excursion": 861.98,
+      "median_excursion": 867.05,
+      "n": 20
+    },
+    {
+      "entry_hour": 19,
+      "exit_hour": 0,
+      "window_hours": 5,
+      "mean_excursion": 746.23,
+      "median_excursion": 631.4,
+      "n": 20
+    },
+    {
+      "entry_hour": 19,
+      "exit_hour": 1,
+      "window_hours": 6,
+      "mean_excursion": 833.6,
+      "median_excursion": 694.55,
+      "n": 16
+    },
+    {
+      "entry_hour": 19,
+      "exit_hour": 2,
+      "window_hours": 7,
+      "mean_excursion": 1000.94,
+      "median_excursion": 955.9,
+      "n": 16
+    },
+    {
+      "entry_hour": 19,
+      "exit_hour": 3,
+      "window_hours": 8,
+      "mean_excursion": 1130.46,
+      "median_excursion": 1193.3,
+      "n": 16
+    },
+    {
+      "entry_hour": 19,
+      "exit_hour": 4,
+      "window_hours": 9,
+      "mean_excursion": 1167.19,
+      "median_excursion": 1229.55,
+      "n": 16
+    },
+    {
+      "entry_hour": 19,
+      "exit_hour": 5,
+      "window_hours": 10,
+      "mean_excursion": 1236.29,
+      "median_excursion": 1229.55,
+      "n": 16
+    },
+    {
+      "entry_hour": 19,
+      "exit_hour": 6,
+      "window_hours": 11,
+      "mean_excursion": 1308.96,
+      "median_excursion": 1229.55,
+      "n": 16
+    },
+    {
+      "entry_hour": 19,
+      "exit_hour": 7,
+      "window_hours": 12,
+      "mean_excursion": 1338.65,
+      "median_excursion": 1229.55,
+      "n": 16
+    },
+    {
+      "entry_hour": 19,
+      "exit_hour": 20,
+      "window_hours": 1,
+      "mean_excursion": 419.6,
+      "median_excursion": 348.0,
+      "n": 20
+    },
+    {
+      "entry_hour": 19,
+      "exit_hour": 21,
+      "window_hours": 2,
+      "mean_excursion": 542.24,
+      "median_excursion": 516.25,
+      "n": 20
+    },
+    {
+      "entry_hour": 19,
+      "exit_hour": 22,
+      "window_hours": 3,
+      "mean_excursion": 614.02,
+      "median_excursion": 593.35,
+      "n": 20
+    },
+    {
+      "entry_hour": 19,
+      "exit_hour": 23,
+      "window_hours": 4,
+      "mean_excursion": 681.7,
+      "median_excursion": 622.55,
+      "n": 20
+    },
+    {
+      "entry_hour": 20,
+      "exit_hour": 0,
+      "window_hours": 4,
+      "mean_excursion": 646.24,
+      "median_excursion": 610.3,
+      "n": 20
+    },
+    {
+      "entry_hour": 20,
+      "exit_hour": 1,
+      "window_hours": 5,
+      "mean_excursion": 725.96,
+      "median_excursion": 618.15,
+      "n": 16
+    },
+    {
+      "entry_hour": 20,
+      "exit_hour": 2,
+      "window_hours": 6,
+      "mean_excursion": 892.96,
+      "median_excursion": 771.8,
+      "n": 16
+    },
+    {
+      "entry_hour": 20,
+      "exit_hour": 3,
+      "window_hours": 7,
+      "mean_excursion": 1027.26,
+      "median_excursion": 907.55,
+      "n": 16
+    },
+    {
+      "entry_hour": 20,
+      "exit_hour": 4,
+      "window_hours": 8,
+      "mean_excursion": 1064.0,
+      "median_excursion": 993.9,
+      "n": 16
+    },
+    {
+      "entry_hour": 20,
+      "exit_hour": 5,
+      "window_hours": 9,
+      "mean_excursion": 1106.86,
+      "median_excursion": 1031.85,
+      "n": 16
+    },
+    {
+      "entry_hour": 20,
+      "exit_hour": 6,
+      "window_hours": 10,
+      "mean_excursion": 1179.53,
+      "median_excursion": 1086.65,
+      "n": 16
+    },
+    {
+      "entry_hour": 20,
+      "exit_hour": 7,
+      "window_hours": 11,
+      "mean_excursion": 1209.22,
+      "median_excursion": 1152.95,
+      "n": 16
+    },
+    {
+      "entry_hour": 20,
+      "exit_hour": 8,
+      "window_hours": 12,
+      "mean_excursion": 1241.64,
+      "median_excursion": 1224.65,
+      "n": 16
+    },
+    {
+      "entry_hour": 20,
+      "exit_hour": 21,
+      "window_hours": 1,
+      "mean_excursion": 370.24,
+      "median_excursion": 347.0,
+      "n": 20
+    },
+    {
+      "entry_hour": 20,
+      "exit_hour": 22,
+      "window_hours": 2,
+      "mean_excursion": 501.67,
+      "median_excursion": 460.4,
+      "n": 20
+    },
+    {
+      "entry_hour": 20,
+      "exit_hour": 23,
+      "window_hours": 3,
+      "mean_excursion": 572.29,
+      "median_excursion": 535.5,
+      "n": 20
+    },
+    {
+      "entry_hour": 21,
+      "exit_hour": 0,
+      "window_hours": 3,
+      "mean_excursion": 578.24,
+      "median_excursion": 504.05,
+      "n": 20
+    },
+    {
+      "entry_hour": 21,
+      "exit_hour": 1,
+      "window_hours": 4,
+      "mean_excursion": 639.24,
+      "median_excursion": 533.6,
+      "n": 16
+    },
+    {
+      "entry_hour": 21,
+      "exit_hour": 2,
+      "window_hours": 5,
+      "mean_excursion": 853.61,
+      "median_excursion": 752.6,
+      "n": 16
+    },
+    {
+      "entry_hour": 21,
+      "exit_hour": 3,
+      "window_hours": 6,
+      "mean_excursion": 1007.55,
+      "median_excursion": 867.05,
+      "n": 16
+    },
+    {
+      "entry_hour": 21,
+      "exit_hour": 4,
+      "window_hours": 7,
+      "mean_excursion": 1031.81,
+      "median_excursion": 875.6,
+      "n": 16
+    },
+    {
+      "entry_hour": 21,
+      "exit_hour": 5,
+      "window_hours": 8,
+      "mean_excursion": 1098.18,
+      "median_excursion": 938.5,
+      "n": 16
+    },
+    {
+      "entry_hour": 21,
+      "exit_hour": 6,
+      "window_hours": 9,
+      "mean_excursion": 1162.79,
+      "median_excursion": 994.55,
+      "n": 16
+    },
+    {
+      "entry_hour": 21,
+      "exit_hour": 7,
+      "window_hours": 10,
+      "mean_excursion": 1192.47,
+      "median_excursion": 1075.45,
+      "n": 16
+    },
+    {
+      "entry_hour": 21,
+      "exit_hour": 8,
+      "window_hours": 11,
+      "mean_excursion": 1245.22,
+      "median_excursion": 1263.9,
+      "n": 16
+    },
+    {
+      "entry_hour": 21,
+      "exit_hour": 9,
+      "window_hours": 12,
+      "mean_excursion": 1430.57,
+      "median_excursion": 1317.25,
+      "n": 16
+    },
+    {
+      "entry_hour": 21,
+      "exit_hour": 22,
+      "window_hours": 1,
+      "mean_excursion": 365.79,
+      "median_excursion": 308.95,
+      "n": 20
+    },
+    {
+      "entry_hour": 21,
+      "exit_hour": 23,
+      "window_hours": 2,
+      "mean_excursion": 498.5,
+      "median_excursion": 432.8,
+      "n": 20
+    },
+    {
+      "entry_hour": 22,
+      "exit_hour": 0,
+      "window_hours": 2,
+      "mean_excursion": 485.13,
+      "median_excursion": 395.95,
+      "n": 20
+    },
+    {
+      "entry_hour": 22,
+      "exit_hour": 1,
+      "window_hours": 3,
+      "mean_excursion": 586.84,
+      "median_excursion": 511.4,
+      "n": 16
+    },
+    {
+      "entry_hour": 22,
+      "exit_hour": 2,
+      "window_hours": 4,
+      "mean_excursion": 865.07,
+      "median_excursion": 770.2,
+      "n": 16
+    },
+    {
+      "entry_hour": 22,
+      "exit_hour": 3,
+      "window_hours": 5,
+      "mean_excursion": 1018.55,
+      "median_excursion": 911.25,
+      "n": 16
+    },
+    {
+      "entry_hour": 22,
+      "exit_hour": 4,
+      "window_hours": 6,
+      "mean_excursion": 1028.51,
+      "median_excursion": 934.1,
+      "n": 16
+    },
+    {
+      "entry_hour": 22,
+      "exit_hour": 5,
+      "window_hours": 7,
+      "mean_excursion": 1102.23,
+      "median_excursion": 934.1,
+      "n": 16
+    },
+    {
+      "entry_hour": 22,
+      "exit_hour": 6,
+      "window_hours": 8,
+      "mean_excursion": 1196.06,
+      "median_excursion": 1036.3,
+      "n": 16
+    },
+    {
+      "entry_hour": 22,
+      "exit_hour": 7,
+      "window_hours": 9,
+      "mean_excursion": 1225.74,
+      "median_excursion": 1053.2,
+      "n": 16
+    },
+    {
+      "entry_hour": 22,
+      "exit_hour": 8,
+      "window_hours": 10,
+      "mean_excursion": 1292.78,
+      "median_excursion": 1212.0,
+      "n": 16
+    },
+    {
+      "entry_hour": 22,
+      "exit_hour": 9,
+      "window_hours": 11,
+      "mean_excursion": 1478.34,
+      "median_excursion": 1212.0,
+      "n": 16
+    },
+    {
+      "entry_hour": 22,
+      "exit_hour": 10,
+      "window_hours": 12,
+      "mean_excursion": 1599.78,
+      "median_excursion": 1311.75,
+      "n": 16
+    },
+    {
+      "entry_hour": 22,
+      "exit_hour": 23,
+      "window_hours": 1,
+      "mean_excursion": 365.08,
+      "median_excursion": 324.25,
+      "n": 20
+    },
+    {
+      "entry_hour": 23,
+      "exit_hour": 0,
+      "window_hours": 1,
+      "mean_excursion": 315.6,
+      "median_excursion": 259.9,
+      "n": 20
+    },
+    {
+      "entry_hour": 23,
+      "exit_hour": 1,
+      "window_hours": 2,
+      "mean_excursion": 470.88,
+      "median_excursion": 452.45,
+      "n": 16
+    },
+    {
+      "entry_hour": 23,
+      "exit_hour": 2,
+      "window_hours": 3,
+      "mean_excursion": 776.09,
+      "median_excursion": 635.55,
+      "n": 16
+    },
+    {
+      "entry_hour": 23,
+      "exit_hour": 3,
+      "window_hours": 4,
+      "mean_excursion": 932.59,
+      "median_excursion": 678.6,
+      "n": 16
+    },
+    {
+      "entry_hour": 23,
+      "exit_hour": 4,
+      "window_hours": 5,
+      "mean_excursion": 962.08,
+      "median_excursion": 760.5,
+      "n": 16
+    },
+    {
+      "entry_hour": 23,
+      "exit_hour": 5,
+      "window_hours": 6,
+      "mean_excursion": 1019.23,
+      "median_excursion": 767.35,
+      "n": 16
+    },
+    {
+      "entry_hour": 23,
+      "exit_hour": 6,
+      "window_hours": 7,
+      "mean_excursion": 1086.19,
+      "median_excursion": 885.1,
+      "n": 16
+    },
+    {
+      "entry_hour": 23,
+      "exit_hour": 7,
+      "window_hours": 8,
+      "mean_excursion": 1107.22,
+      "median_excursion": 910.8,
+      "n": 16
+    },
+    {
+      "entry_hour": 23,
+      "exit_hour": 8,
+      "window_hours": 9,
+      "mean_excursion": 1157.48,
+      "median_excursion": 1004.9,
+      "n": 16
+    },
+    {
+      "entry_hour": 23,
+      "exit_hour": 9,
+      "window_hours": 10,
+      "mean_excursion": 1358.32,
+      "median_excursion": 1016.75,
+      "n": 16
+    },
+    {
+      "entry_hour": 23,
+      "exit_hour": 10,
+      "window_hours": 11,
+      "mean_excursion": 1479.76,
+      "median_excursion": 1016.75,
+      "n": 16
+    },
+    {
+      "entry_hour": 23,
+      "exit_hour": 11,
+      "window_hours": 12,
+      "mean_excursion": 1519.36,
+      "median_excursion": 1030.9,
+      "n": 16
+    }
+  ]
+}

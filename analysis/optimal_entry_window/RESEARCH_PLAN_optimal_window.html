@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head><title>Optimal Entry/Exit Window Research Plan</title></head>
+<body>
+<h1>Optimal Entry/Exit Window — Research Plan</h1>
+<p><strong>Created:</strong> 12 March 2026</p>
+<p><strong>Goal:</strong> Find the daily time window where BTC makes the biggest peak move per hour of exposure,
+to minimize theta cost relative to take-profit probability.</p>
+
+<h2>Key Insight</h2>
+<p>We buy a straddle/strangle at entry time and hold until take-profit is hit (BTC moves $X up or down from entry).
+If not hit, we hard-close at exit time. Theta costs us per hour. So we want the window with the
+<strong>biggest max excursion per hour of hold time</strong>.</p>
+
+<h2>Key Metric: Max Excursion</h2>
+<pre>
+For a window from H_open to H_close:
+
+  S_entry   = open price of the H_open candle
+  MaxHigh   = max(high of each 1h candle in [H_open, H_close-1])
+  MinLow    = min(low of each 1h candle in [H_open, H_close-1])
+  Excursion = max(MaxHigh - S_entry, S_entry - MinLow)
+
+This is the furthest BTC traveled from entry in either direction —
+the number that determines whether take-profit gets hit.
+</pre>
+
+<h2>Data Source</h2>
+<pre>
+Binance BTCUSDT Perpetual Futures — 1h OHLC candles
+Endpoint: GET https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&amp;interval=1h&amp;limit=672
+No authentication required. Returns: [open_time, open, high, low, close, volume, ...]
+672 candles = 4 weeks × 24 hours.
+</pre>
+
+<h2>Analytical Steps</h2>
+
+<h3>Step 1: Build the Triangular Max-Excursion Table</h3>
+<p>A 24×24 upper-triangular matrix.</p>
+<ul>
+  <li>Rows = entry hour (0–23 UTC)</li>
+  <li>Columns = exit hour (entry+1 through entry+12)</li>
+  <li>Filter: Mon–Fri only (by UTC day-of-week of entry candle)</li>
+  <li>~20 weekdays of data</li>
+</ul>
+<p>For each weekday, for each (entry, exit) pair:</p>
+<ol>
+  <li>S_entry = open of the entry-hour candle</li>
+  <li>Scan all candles from entry through exit-1</li>
+  <li>MaxHigh = max(high of each candle)</li>
+  <li>MinLow = min(low of each candle)</li>
+  <li>Excursion = max(MaxHigh - S_entry, S_entry - MinLow)</li>
+</ol>
+<p>Average across ~20 weekdays → one number per cell.</p>
+
+<h3>Step 2: Build the Efficiency Table (Move Per Hour)</h3>
+<p>Same shape. Each cell = Avg Excursion / Window Hours.</p>
+<pre>
+  Efficiency(H_open, H_close) = Avg Max Excursion / (H_close - H_open)
+</pre>
+<p>Core answer: where do you get the most move per hour of theta paid?</p>
+
+<h3>Step 3: Identify Optimal Windows</h3>
+<p>Rank the top 10 (entry, exit) pairs by efficiency.
+The winner says: "Open at X:00, close at Y:00 — you get $Z of max excursion per hour of hold time."</p>
+
+<h2>Output Tables</h2>
+<table border="1" cellpadding="4">
+  <tr><th>Table</th><th>Rows</th><th>Cols</th><th>Cell Value</th></tr>
+  <tr><td>A. Avg Max Excursion ($)</td><td>Entry hour</td><td>Exit hour</td><td>Mean max move from entry price</td></tr>
+  <tr><td>B. Efficiency ($/hr)</td><td>Entry hour</td><td>Exit hour</td><td>Excursion / window hours</td></tr>
+  <tr><td>C. Median Excursion ($)</td><td>Entry hour</td><td>Exit hour</td><td>Median (robust to outliers)</td></tr>
+  <tr><td>D. Top-10 windows</td><td>Ranked list</td><td>—</td><td>Entry, exit, avg excursion, efficiency, n</td></tr>
+</table>
+
+<h2>Constraints</h2>
+<ul>
+  <li>Mon–Fri only (filter by UTC day-of-week of entry candle)</li>
+  <li>Min window: 1 hour, max window: 12 hours</li>
+  <li>Entry hours: 0–23 UTC (full 24h coverage)</li>
+  <li>4 weeks back from today = ~20 weekdays</li>
+</ul>
+
+<h2>How This Fits the Bigger Picture</h2>
+<ol>
+  <li><strong>WHEN</strong> to open and close → this analysis (hourly excursion)</li>
+  <li><strong>WHAT</strong> to open (straddle vs strangle width) → the PnL grid analysis (analyze_grid.py)</li>
+  <li><strong>WHERE</strong> to set take-profit → based on typical excursion for the chosen window</li>
+</ol>
+
+<h2>Future Extensions</h2>
+<ul>
+  <li>Compare different DTEs (0DTE vs 1DTE vs 2DTE) to see where theta/gamma tradeoff is best</li>
+  <li>Weekend analysis (separate table)</li>
+  <li>Regime filtering: separate high-vol weeks from low-vol weeks</li>
+  <li>Day-of-week breakdown (Mon vs Tue vs ... individual tables)</li>
+</ul>
+</body>
+</html>
