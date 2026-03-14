@@ -67,6 +67,9 @@ logs/
 .DS_Store
 Thumbs.db
 
+# Deployment secrets (VPS connection details)
+.deploy.env
+
 # Project specific
 archive/
 *.db

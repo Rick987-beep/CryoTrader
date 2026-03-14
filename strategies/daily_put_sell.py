@@ -66,11 +66,11 @@ logger = logging.getLogger(__name__)
 # Structure
 QTY = 0.8                            # BTC per leg (adjust to desired notional)
 TARGET_DELTA = -0.10                 # OTM put delta target
-DTE = 2                              # 2 days to expiry
+DTE = 1                              # 1 day to expiry
 
 # Scheduling — UTC hours
-ENTRY_HOUR_START = 19                 # Open window: 03:00 UTC
-ENTRY_HOUR_END = 20                   # Close window: 04:00 UTC
+ENTRY_HOUR_START = 3                 # Open window: 03:00 UTC
+ENTRY_HOUR_END = 4                   # Close window: 04:00 UTC
 
 # Risk
 MIN_MARGIN_PCT = 20                  # Require ≥20% available margin

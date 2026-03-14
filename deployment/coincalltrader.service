@@ -1,0 +1,52 @@
+# ===========================================================================
+# CoincallTrader — systemd Service File
+#
+# Manages the trading bot as a Linux service.  Replaces NSSM on Windows.
+#
+# Installed to: /etc/systemd/system/coincalltrader.service
+# Managed via:  systemctl start|stop|restart|status coincalltrader
+# Logs via:     journalctl -u coincalltrader -f
+#
+# Installation is handled automatically by deployment/server-setup.sh
+# ===========================================================================
+
+[Unit]
+Description=CoincallTrader — Options Trading Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Application directory and command
+WorkingDirectory=/opt/coincalltrader
+ExecStart=/opt/coincalltrader/.venv/bin/python main.py
+
+# Environment: production .env is loaded by python-dotenv inside the app,
+# but we set the working directory so relative paths (logs/, etc.) resolve.
+Environment=PYTHONUNBUFFERED=1
+
+# Restart policy: restart on crash, but not on clean exit (Ctrl+C / SIGTERM).
+# 10s delay prevents tight crash loops from hammering the exchange API.
+Restart=on-failure
+RestartSec=10
+
+# Logging: stdout/stderr go to journald automatically.
+# View with: journalctl -u coincalltrader -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=coincalltrader
+
+# Resource limits (safety nets)
+LimitNOFILE=65535
+MemoryMax=1G
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/coincalltrader/logs
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,47 @@
+# ===========================================================================
+# CoincallTrader — rsync Exclusion List
+#
+# Files and directories listed here are NOT synced to the VPS.
+# The production server only gets the application code it needs to run.
+#
+# Used by: deployment/deploy.sh (passed via --exclude-from)
+# ===========================================================================
+
+# ── Python artifacts ────────────────────────────────────────────────────
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# ── Git ─────────────────────────────────────────────────────────────────
+.git/
+.gitignore
+
+# ── Secrets & local config (these live on the VPS separately) ───────────
+.env
+.deploy.env
+
+# ── Logs & runtime data (preserved on the VPS across deploys) ───────────
+logs/
+
+# ── Development-only directories ────────────────────────────────────────
+archive/
+analysis/
+docs/
+tests/
+
+# ── Deployment scripts (already on dev machine, not needed on VPS) ──────
+deployment/
+
+# ── OS junk ─────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# ── IDE ─────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
