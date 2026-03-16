@@ -180,17 +180,17 @@ def test_2_config_construction():
     print("\n--- Test 2: StrategyConfig + LegSpec construction ---")
 
     spec1 = LegSpec(
-        option_type="C", side=2, qty=0.1,
+        option_type="C", side="sell", qty=0.1,
         strike_criteria={"type": "delta", "value": 0.25},
         expiry_criteria={"symbol": "28MAR26"},
     )
     spec2 = LegSpec(
-        option_type="P", side=2, qty=0.1,
+        option_type="P", side="sell", qty=0.1,
         strike_criteria={"type": "delta", "value": -0.25},
         expiry_criteria={"symbol": "28MAR26"},
     )
 
-    record("LegSpec fields", spec1.option_type == "C" and spec1.side == 2 and spec1.qty == 0.1)
+    record("LegSpec fields", spec1.option_type == "C" and spec1.side == "sell" and spec1.qty == 0.1)
     record("LegSpec default underlying", spec1.underlying == "BTC")
 
     config = StrategyConfig(
@@ -225,19 +225,19 @@ def test_3_lifecycle_strategy_queries():
 
     # Create trades with different strategy IDs
     t1 = lm.create(
-        legs=[TradeLeg(symbol="BTCUSD-28MAR26-100000-C", qty=0.1, side=1)],
+        legs=[TradeLeg(symbol="BTCUSD-28MAR26-100000-C", qty=0.1, side="buy")],
         strategy_id="strat_A",
     )
     t2 = lm.create(
-        legs=[TradeLeg(symbol="BTCUSD-28MAR26-90000-P", qty=0.1, side=1)],
+        legs=[TradeLeg(symbol="BTCUSD-28MAR26-90000-P", qty=0.1, side="buy")],
         strategy_id="strat_A",
     )
     t3 = lm.create(
-        legs=[TradeLeg(symbol="BTCUSD-28MAR26-80000-C", qty=0.1, side=1)],
+        legs=[TradeLeg(symbol="BTCUSD-28MAR26-80000-C", qty=0.1, side="buy")],
         strategy_id="strat_B",
     )
     t4 = lm.create(
-        legs=[TradeLeg(symbol="BTCUSD-28MAR26-70000-P", qty=0.1, side=1)],
+        legs=[TradeLeg(symbol="BTCUSD-28MAR26-70000-P", qty=0.1, side="buy")],
         strategy_id=None,  # No strategy
     )
 
@@ -280,8 +280,8 @@ def test_4_persistence_snapshot():
 
     lm.create(
         legs=[
-            TradeLeg(symbol="BTCUSD-28MAR26-100000-C", qty=0.1, side=1),
-            TradeLeg(symbol="BTCUSD-28MAR26-90000-P", qty=0.1, side=2),
+            TradeLeg(symbol="BTCUSD-28MAR26-100000-C", qty=0.1, side="buy"),
+            TradeLeg(symbol="BTCUSD-28MAR26-90000-P", qty=0.1, side="sell"),
         ],
         strategy_id="test_persist",
     )
@@ -316,7 +316,7 @@ def test_4_persistence_snapshot():
     leg0 = trade_data["open_legs"][0]
     record("leg has symbol", "symbol" in leg0)
     record("leg has qty", leg0.get("qty") == 0.1)
-    record("leg has side", leg0.get("side") == 1)
+    record("leg has side", leg0.get("side") == "buy")
 
 
 # =============================================================================
@@ -334,7 +334,7 @@ def test_5_runner_gating():
     config = StrategyConfig(
         name="test_gating",
         legs=[
-            LegSpec("C", side=1, qty=0.1,
+            LegSpec("C", side="buy", qty=0.1,
                     strike_criteria={"type": "strike", "value": 100000},
                     expiry_criteria={"symbol": "28MAR26"}),
         ],
@@ -364,7 +364,7 @@ def test_5_runner_gating():
     # Gate: max concurrent trades reached
     # Simulate by creating a trade with matching strategy_id
     ctx.lifecycle_manager.create(
-        legs=[TradeLeg(symbol="BTCUSD-28MAR26-100000-C", qty=0.1, side=1)],
+        legs=[TradeLeg(symbol="BTCUSD-28MAR26-100000-C", qty=0.1, side="buy")],
         strategy_id="test_gating",
     )
     record("should_open (max trades)", not runner._should_open(acct))
@@ -388,7 +388,7 @@ def test_5_runner_gating():
     runner2 = StrategyRunner(config2, ctx)
     # Create and close a trade for this strategy
     t = ctx.lifecycle_manager.create(
-        legs=[TradeLeg(symbol="BTCUSD-28MAR26-100000-C", qty=0.1, side=1)],
+        legs=[TradeLeg(symbol="BTCUSD-28MAR26-100000-C", qty=0.1, side="buy")],
         strategy_id="test_cooldown",
     )
     t.state = TradeState.CLOSED
@@ -469,7 +469,7 @@ def test_6_resolve_legs_live():
     # Now resolve legs using exact strike criteria
     specs = [
         LegSpec(
-            option_type="C", side=1, qty=0.1,
+            option_type="C", side="buy", qty=0.1,
             strike_criteria={"type": "strike", "value": mid_strike},
             expiry_criteria={"symbol": expiry},
         ),
@@ -480,7 +480,7 @@ def test_6_resolve_legs_live():
         record("resolve_legs succeeded", len(resolved) == 1)
         record("resolved symbol", True, resolved[0].symbol)
         record("resolved qty", resolved[0].qty == 0.1)
-        record("resolved side", resolved[0].side == 1)
+        record("resolved side", resolved[0].side == "buy")
     except Exception as e:
         record("resolve_legs", False, str(e))
 

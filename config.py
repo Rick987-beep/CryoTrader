@@ -28,6 +28,16 @@ if DEPLOYMENT_TARGET not in ['development', 'production']:
     raise ValueError(f"Invalid DEPLOYMENT_TARGET: '{DEPLOYMENT_TARGET}'. Must be 'development' or 'production'")
 
 # =============================================================================
+# EXCHANGE SELECTION
+# =============================================================================
+
+# Which exchange to use: 'coincall' (default) or 'deribit' (Phase 2)
+EXCHANGE = os.getenv('EXCHANGE', 'coincall').lower()
+
+if EXCHANGE not in ['coincall', 'deribit']:
+    raise ValueError(f"Invalid EXCHANGE: '{EXCHANGE}'. Must be 'coincall' or 'deribit'")
+
+# =============================================================================
 # ENVIRONMENT SELECTION
 # =============================================================================
 

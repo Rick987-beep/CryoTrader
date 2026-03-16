@@ -68,7 +68,7 @@ QTY = 0.01                          # BTC per leg (keep small for testing)
 CALL_DELTA = 0.15                   # target call delta (further OTM = smaller)
 PUT_DELTA = -0.15                   # target put delta (further OTM = smaller)
 DTE = "next"                        # expiry: "next" available, or int (0=0DTE, 1=1DTE, …)
-SIDE = 1                            # 1 = BUY (long strangle), 2 = SELL (short strangle)
+SIDE = "buy"                         # "buy" (long strangle) or "sell" (short strangle)
 
 # Entry conditions
 ENTRY_START_HOUR = 8                # UTC hour — earliest entry

@@ -46,12 +46,12 @@ class TestStraddleHelper(unittest.TestCase):
     def test_default_side_is_buy(self):
         legs = straddle(qty=0.01)
         for leg in legs:
-            self.assertEqual(leg.side, 1, "Default side should be 1 (buy)")
+            self.assertEqual(leg.side, "buy", "Default side should be 'buy'")
 
     def test_side_sell(self):
-        legs = straddle(qty=0.01, side=2)
+        legs = straddle(qty=0.01, side="sell")
         for leg in legs:
-            self.assertEqual(leg.side, 2)
+            self.assertEqual(leg.side, "sell")
 
     def test_quantity_propagated(self):
         legs = straddle(qty=0.5)
@@ -99,7 +99,7 @@ class TestAtmStraddleStrategy(unittest.TestCase):
 
     def test_legs_are_buy(self):
         for leg in self.config.legs:
-            self.assertEqual(leg.side, 1)
+            self.assertEqual(leg.side, "buy")
 
     def test_execution_mode_limit(self):
         self.assertEqual(self.config.execution_mode, "limit")

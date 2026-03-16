@@ -215,7 +215,7 @@ class _LegFillState:
     """Internal: tracks one leg's order and fill progress."""
     symbol: str
     qty: float
-    side: int          # 1=buy, 2=sell
+    side: str          # "buy" or "sell"
     order_id: Optional[str] = None
     filled_qty: float = 0.0
     fill_price: Optional[float] = None
@@ -232,7 +232,7 @@ class _LegFillState:
 
     @property
     def side_label(self) -> str:
-        return "buy" if self.side == 1 else "sell"
+        return self.side
 
 
 class LimitFillManager:
@@ -338,8 +338,7 @@ class LimitFillManager:
             side = leg.side if hasattr(leg, 'side') else leg['side']
             price = self._get_price_for_current_mode(symbol, side)
             if price is None:
-                side_label = "buy" if side == 1 else "sell"
-                logger.error(f"LimitFillManager: no orderbook price for {symbol} ({side_label})")
+                logger.error(f"LimitFillManager: no orderbook price for {symbol} ({side})")
                 return False  # no orders placed yet — nothing to cancel
             leg_data.append((leg, symbol, qty, side, price))
 
@@ -537,7 +536,7 @@ class LimitFillManager:
 
     # -- Internal -------------------------------------------------------------
 
-    def _place_single(self, symbol: str, qty: float, side: int,
+    def _place_single(self, symbol: str, qty: float, side: str,
                       price: float, reduce_only: bool, leg_index: int) -> Optional[Any]:
         """Place a single order — routes through OrderManager if available."""
         if self._order_manager and self._lifecycle_id and self._purpose:
@@ -639,7 +638,7 @@ class LimitFillManager:
 
     # -- Pricing Helpers -------------------------------------------------------
 
-    def _get_price_for_current_mode(self, symbol: str, side: int) -> Optional[float]:
+    def _get_price_for_current_mode(self, symbol: str, side: str) -> Optional[float]:
         """
         Get order price based on the current execution mode.
 
@@ -655,7 +654,7 @@ class LimitFillManager:
         else:
             return self._get_aggressive_price(symbol, side)
 
-    def _get_phased_price(self, symbol: str, side: int, phase: ExecutionPhase) -> Optional[float]:
+    def _get_phased_price(self, symbol: str, side: str, phase: ExecutionPhase) -> Optional[float]:
         """Compute price according to the phase's pricing strategy."""
         try:
             ob = get_option_orderbook(symbol)
@@ -667,9 +666,9 @@ class LimitFillManager:
 
             if phase.pricing == "aggressive":
                 buffer = 1 + (phase.buffer_pct / 100.0)
-                if side == 1 and best_ask is not None:
+                if side == "buy" and best_ask is not None:
                     return round(best_ask * buffer, 2)
-                elif side == 2 and best_bid is not None:
+                elif side == "sell" and best_bid is not None:
                     return round(best_bid / buffer, 2)
 
             elif phase.pricing == "mid":
@@ -678,9 +677,9 @@ class LimitFillManager:
                     return round(mid, 2)
 
             elif phase.pricing == "top_of_book":
-                if side == 1 and best_ask is not None:
+                if side == "buy" and best_ask is not None:
                     return round(best_ask, 2)
-                elif side == 2 and best_bid is not None:
+                elif side == "sell" and best_bid is not None:
                     return round(best_bid, 2)
 
             elif phase.pricing == "mark":
@@ -696,7 +695,7 @@ class LimitFillManager:
             logger.error(f"LimitFillManager: error computing {phase.pricing} price for {symbol}: {e}")
             return None
 
-    def _get_aggressive_price(self, symbol: str, side: int) -> Optional[float]:
+    def _get_aggressive_price(self, symbol: str, side: str) -> Optional[float]:
         """Fetch best bid/ask and apply aggressive buffer (legacy mode)."""
         try:
             ob = get_option_orderbook(symbol)
@@ -705,10 +704,10 @@ class LimitFillManager:
 
             buffer = 1 + (self._params.aggressive_buffer_pct / 100.0)
 
-            if side == 1 and ob.get('asks'):
+            if side == "buy" and ob.get('asks'):
                 raw = float(ob['asks'][0]['price'])
                 return round(raw * buffer, 2)
-            elif side == 2 and ob.get('bids'):
+            elif side == "sell" and ob.get('bids'):
                 raw = float(ob['bids'][0]['price'])
                 return round(raw / buffer, 2)
 

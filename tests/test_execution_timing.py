@@ -113,7 +113,7 @@ check("state is still PENDING_OPEN", t2.state == TradeState.PENDING_OPEN)
 print("\n=== StrategyConfig new fields ===")
 
 from option_selection import strangle
-legs = strangle(qty=0.01, call_delta=0.15, put_delta=-0.15, dte="next", side=1)
+legs = strangle(qty=0.01, call_delta=0.15, put_delta=-0.15, dte="next", side="buy")
 
 sc = StrategyConfig(name="test", legs=legs)
 check("default execution_params is None", sc.execution_params is None)

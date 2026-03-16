@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0-wip] - 2026-03-16
+
+### ⚠️ Work in Progress — Deribit Migration Phase 1
+
+Phase 1 (Exchange Abstraction Layer) of the Coincall → Deribit migration is complete.
+The system still runs on Coincall — no behavior changes. `EXCHANGE=coincall` (default).
+Next: Phase 2 (Deribit adapter implementation).
+
+### Added
+- **Exchange abstraction layer** (`exchanges/`) — 5 abstract base classes defining the exchange contract (`ExchangeAuth`, `ExchangeMarketData`, `ExchangeExecutor`, `ExchangeAccountManager`, `ExchangeRFQExecutor`)
+- **Coincall adapters** (`exchanges/coincall/`) — 5 thin adapter classes wrapping existing Coincall modules behind the new interfaces
+- **Exchange factory** (`exchanges/__init__.py`) — `build_exchange("coincall")` returns all exchange components; raises `NotImplementedError` for `"deribit"` (Phase 2)
+- **Exchange config** (`config.py`) — `EXCHANGE` env var (default: `"coincall"`) with validation
+
+### Changed
+- **Side encoding normalized** — All internal code now uses `"buy"` / `"sell"` strings instead of `1` / `2` integers. Affected: `TradeLeg.side`, `LegSpec.side`, `OrderRecord.side`, `_LegFillState.side`, `LegChunkState.side`, `_CloseLeg.close_side`. `CoincallExecutorAdapter` converts back to int at the API boundary.
+- **Backward compatibility** — `TradeLeg.__post_init__` and `OrderRecord.from_dict()` auto-convert legacy int sides from crash-recovery snapshots
+- **`OrderManager`** — Accepts `exchange_state_map` parameter for exchange-specific order status mapping (defaults to Coincall map)
+- **`LifecycleEngine`** — Accepts `executor`, `rfq_executor`, `exchange_state_map` parameters via dependency injection (defaults to Coincall)
+- **`strategy.py`** — `build_context()` now uses `build_exchange()` factory; `TradingContext` fields typed as `Any` for exchange-agnostic DI
+- **All 4 strategy files** updated to use string side encoding
+- **Templates** (`_orders.html`) — Side display uses `o.side|upper` instead of int ternary
+- **Documentation** — `MODULE_REFERENCE.md`, `.copilot-instructions.md`, `MIGRATION_PLAN_DERIBIT.md` updated with string side encoding and Phase 1 completion status
+
+### Fixed
+- **Test reconciliation mocks** (`test_order_manager.py`, `test_phase3_hardening.py`) — Pre-existing bug: test mocks used raw API key `orderId` instead of normalized `order_id` (as returned by `account_manager.get_open_orders()`). Production `account_manager.py` normalization is untouched.
+
+### Test Results (Phase 1 verification)
+| Suite | Result |
+|-------|--------|
+| test_phase2_structural.py | 67/67 ✅ |
+| test_phase3_hardening.py | 23/23 ✅ |
+| test_order_manager.py | 85/85 ✅ |
+| test_strategy_framework.py | 71/71 ✅ |
+| test_execution_timing.py | 40/40 ✅ |
+| test_atm_straddle.py | 34/34 ✅ |
+| test_strategy_layer.py | 49/50 ⚠️ (1 pre-existing: strangle default dte changed from 0 to "next") |
+
+### Files
+- NEW: `exchanges/__init__.py`, `exchanges/base.py`
+- NEW: `exchanges/coincall/__init__.py`, `auth.py`, `market_data.py`, `executor.py`, `account.py`, `rfq.py`
+- MODIFIED: `config.py`, `trade_lifecycle.py`, `option_selection.py`, `order_manager.py`, `execution_router.py`, `position_closer.py`, `lifecycle_engine.py`, `strategy.py`, `telegram_notifier.py`, `multileg_orderbook.py`, `trade_execution.py`
+- MODIFIED: `strategies/` (all 4 strategy files)
+- MODIFIED: `templates/_orders.html`
+- MODIFIED: All 7 test files in `tests/`
+- MODIFIED: `docs/MODULE_REFERENCE.md`, `.copilot-instructions.md`, `docs/MIGRATION_PLAN_DERIBIT.md`
+
 ## [1.2.1] - 2026-03-16
 
 ### Added

@@ -149,7 +149,7 @@ class ExecutionRouter:
         rfq_legs = [
             OptionLeg(
                 instrument=leg.symbol,
-                side="BUY" if leg.side == 1 else "SELL",
+                side=leg.side.upper(),
                 qty=leg.qty,
             )
             for leg in trade.open_legs
@@ -233,7 +233,7 @@ class ExecutionRouter:
         rfq_legs = [
             OptionLeg(
                 instrument=leg.symbol,
-                side="BUY" if leg.side == 1 else "SELL",
+                side=leg.side.upper(),
                 qty=leg.filled_qty if leg.filled_qty > 0 else leg.qty,
             )
             for leg in trade.open_legs

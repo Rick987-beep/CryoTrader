@@ -160,7 +160,7 @@ def _tp_filled_exit():
             TradeLeg(
                 symbol=leg.symbol,
                 qty=record.filled_qty or leg.filled_qty,
-                side=1,  # buy to close
+                side="buy",  # buy to close
                 order_id=tp_order_id,
                 fill_price=record.avg_fill_price,
                 filled_qty=record.filled_qty or leg.filled_qty,
@@ -226,13 +226,13 @@ def _place_tp_limit_order(trade) -> None:
 
     try:
         # Place limit buy order via OrderManager (handles executor + tracking)
-        # side=1=buy to close, reduce_only handled by OrderManager for CLOSE_LEG
+        # side="buy"=buy to close, reduce_only handled by OrderManager for CLOSE_LEG
         record = _ctx.lifecycle_manager.order_manager.place_order(
             lifecycle_id=trade.id,
             leg_index=0,
             purpose=OrderPurpose.CLOSE_LEG,
             symbol=leg.symbol,
-            side=1,   # buy to close
+            side="buy",   # buy to close
             qty=leg.filled_qty,
             price=tp_price,
         )
@@ -248,7 +248,7 @@ def _place_tp_limit_order(trade) -> None:
                     TradeLeg(
                         symbol=leg.symbol,
                         qty=leg.filled_qty,
-                        side=1,  # buy to close
+                        side="buy",  # buy to close
                         order_id=record.order_id,
                     )
                 ]
@@ -410,7 +410,7 @@ def daily_put_sell() -> StrategyConfig:
         legs=[
             LegSpec(
                 option_type="P",
-                side=2,                                # 2 = SELL
+                side="sell",                           # SELL
                 qty=QTY,
                 strike_criteria={"type": "delta", "value": TARGET_DELTA},
                 expiry_criteria={"dte": DTE},

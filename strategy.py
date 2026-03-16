@@ -51,13 +51,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
-from account_manager import AccountManager, AccountSnapshot, PositionMonitor
-from auth import CoincallAuth
-from config import API_KEY, API_SECRET, BASE_URL
-from market_data import MarketData
+from account_manager import AccountSnapshot, PositionMonitor
+from exchanges import build_exchange
 from option_selection import LegSpec, resolve_legs
-from rfq import RFQExecutor
-from trade_execution import TradeExecutor
 from trade_execution import ExecutionParams, ExecutionPhase
 from lifecycle_engine import LifecycleEngine
 from trade_lifecycle import (
@@ -83,14 +79,14 @@ class TradingContext:
     importing module-level globals.  For tests, individual services
     can be replaced with mocks.
     """
-    auth: CoincallAuth
-    market_data: MarketData
-    executor: TradeExecutor
-    rfq_executor: RFQExecutor
-    account_manager: AccountManager
+    auth: Any                          # ExchangeAuth adapter
+    market_data: Any                    # ExchangeMarketData adapter
+    executor: Any                       # ExchangeExecutor adapter
+    rfq_executor: Any                   # ExchangeRFQExecutor adapter
+    account_manager: Any                # ExchangeAccountManager adapter
     position_monitor: PositionMonitor
     lifecycle_manager: LifecycleEngine
-    persistence: Optional[Any] = None  # TradeStatePersistence (optional)
+    persistence: Optional[Any] = None   # TradeStatePersistence (optional)
 
 
 def build_context(
@@ -103,15 +99,20 @@ def build_context(
     The PositionMonitor is created but NOT started — caller must invoke
     ctx.position_monitor.start() when ready.
     """
-    auth = CoincallAuth(API_KEY, API_SECRET, BASE_URL)
-    market_data_svc = MarketData()
-    executor = TradeExecutor()
-    rfq_executor = RFQExecutor()
-    account_mgr = AccountManager()
+    components = build_exchange()
+    auth = components['auth']
+    market_data_svc = components['market_data']
+    executor = components['executor']
+    rfq_executor = components['rfq_executor']
+    account_mgr = components['account_manager']
+    state_map = components['state_map']
     monitor = PositionMonitor(poll_interval=poll_interval)
     lifecycle_mgr = LifecycleEngine(
         rfq_notional_threshold=rfq_notional_threshold,
         account_manager=account_mgr,
+        executor=executor,
+        rfq_executor=rfq_executor,
+        exchange_state_map=state_map,
     )
 
     # Wire lifecycle ticks to position monitor

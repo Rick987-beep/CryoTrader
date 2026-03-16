@@ -45,7 +45,7 @@ class _CloseLeg:
     """Tracks one position being closed on the exchange."""
     symbol: str
     qty: float
-    close_side: int          # 2 = sell to close long, 1 = buy to close short
+    close_side: str          # "sell" to close long, "buy" to close short
     mark_price: float
     order_id: Optional[str] = None
     filled: bool = False
@@ -53,7 +53,7 @@ class _CloseLeg:
 
     @property
     def side_label(self) -> str:
-        return "SELL" if self.close_side == 2 else "BUY"
+        return self.close_side.upper()
 
     def __repr__(self) -> str:
         status = f"FILLED @ ${self.fill_price:.2f}" if self.filled else f"PENDING (order={self.order_id})"
@@ -314,7 +314,7 @@ class PositionCloser:
         """Convert raw position dicts to _CloseLeg trackers."""
         legs = []
         for p in positions:
-            close_side = 2 if p["trade_side"] == 1 else 1
+            close_side = "sell" if p["trade_side"] == 1 else "buy"
             legs.append(_CloseLeg(
                 symbol=p["symbol"],
                 qty=p["qty"],
@@ -325,7 +325,7 @@ class PositionCloser:
 
     def _aggressive_price(self, leg: _CloseLeg) -> float:
         """10% worse than mark — guarantees fills on illiquid legs."""
-        if leg.close_side == 2:  # selling → go below mark
+        if leg.close_side == "sell":  # selling → go below mark
             return leg.mark_price * (1 - self.PHASE2_DISCOUNT)
         else:  # buying → go above mark
             return leg.mark_price * (1 + self.PHASE2_DISCOUNT)

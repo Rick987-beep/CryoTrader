@@ -2,7 +2,8 @@
 
 **Author:** Architecture Review  
 **Date:** 15 March 2026  
-**Status:** DRAFT — Proposal for Review  
+**Status:** IN PROGRESS — Phase 1 Complete (v1.3.0-wip)  
+**Last Updated:** 16 March 2026  
 **Scope:** Full exchange migration from Coincall to Deribit, with optional dual-exchange support
 
 ---
@@ -1085,37 +1086,44 @@ This builds confidence that the Deribit implementation produces equivalent decis
 - [ ] Document all Deribit API endpoints we'll need
 - [ ] Identify any Deribit-specific constraints (rate limits, minimum order sizes, tick sizes)
 
-### Phase 1: Exchange Abstraction Layer
+### Phase 1: Exchange Abstraction Layer ✅ COMPLETE (v1.3.0-wip, 16 March 2026)
 **Goal:** Introduce interfaces without changing behavior. The system still runs on Coincall.
 
-- [ ] Define abstract interfaces: `ExchangeAuth`, `ExchangeMarketData`, `ExchangeExecutor`, `ExchangeAccountManager`, `ExchangeRFQExecutor`
-- [ ] Define normalized data models: `Instrument`, `OptionTicker`, `Orderbook`, `OrderResult`, `AccountSummary`, `Position`, `RFQLeg`, `RFQHandle`, `RFQQuoteSnapshot`, `RFQTradeResult`
-- [ ] Wrap existing Coincall code behind these interfaces (move into `exchanges/coincall/`)
-- [ ] Extract RFQ orchestration logic from `rfq.py` into shared layer; move Coincall API calls into `exchanges/coincall/rfq.py`
-- [ ] Migrate `TradeLeg.side` from int to string
-- [ ] Update `TradingContext` to reference abstract types
-- [ ] Update `build_context()` to use exchange factory
-- [ ] Parameterize `_EXCHANGE_STATE_MAP` in `OrderManager`
-- [ ] Parameterize RFQ minimum thresholds in `ExecutionRouter` (from exchange config)
-- [ ] Run all 352+ existing tests — everything must still pass
+- [x] Define abstract interfaces: `ExchangeAuth`, `ExchangeMarketData`, `ExchangeExecutor`, `ExchangeAccountManager`, `ExchangeRFQExecutor`
+- [ ] Define normalized data models: `Instrument`, `OptionTicker`, `Orderbook`, `OrderResult`, `AccountSummary`, `Position`, `RFQLeg`, `RFQHandle`, `RFQQuoteSnapshot`, `RFQTradeResult` *(deferred — Phase 2, when Deribit adapters need them)*
+- [x] Wrap existing Coincall code behind these interfaces (move into `exchanges/coincall/`)
+- [ ] Extract RFQ orchestration logic from `rfq.py` into shared layer; move Coincall API calls into `exchanges/coincall/rfq.py` *(deferred — Phase 2, current RFQ adapter wraps existing rfq.py)*
+- [x] Migrate `TradeLeg.side` from int to string (`"buy"` / `"sell"` everywhere, adapter converts at API boundary)
+- [x] Update `TradingContext` to reference abstract types
+- [x] Update `build_context()` to use exchange factory
+- [x] Parameterize `_EXCHANGE_STATE_MAP` in `OrderManager`
+- [ ] Parameterize RFQ minimum thresholds in `ExecutionRouter` (from exchange config) *(deferred — Phase 2)*
+- [x] Run all existing tests — everything passes (379 total: 67+23+85+71+40+34+49+10 across 8 test suites)
 - [ ] Deploy to production on Coincall — verify no regressions
+
+**Implementation notes:**
+- `exchanges/base.py` — 5 ABCs defining the exchange contract
+- `exchanges/__init__.py` — `build_exchange(name)` factory (supports "coincall"; raises for "deribit")
+- `exchanges/coincall/` — 5 thin adapter classes wrapping existing modules
+- `CoincallExecutorAdapter.place_order()` converts `"buy"→1, "sell"→2` at the API boundary
+- `TradeExecutor.place_order(side: int)` is **unchanged** — adapters handle translation
+- Backward compat: `TradeLeg.__post_init__` and `OrderRecord.from_dict()` auto-convert legacy int sides from crash-recovery snapshots
+- `config.py` — `EXCHANGE = os.getenv('EXCHANGE', 'coincall')` with validation
+- All documentation updated (MODULE_REFERENCE.md, .copilot-instructions.md)
 
 **Directory structure after Phase 1:**
 ```
 exchanges/
-  __init__.py
-  base.py              # Abstract interfaces + normalized data models (incl. RFQ)
-  factory.py           # build_exchange(name) factory
-  rfq_orchestrator.py  # Shared RFQ execution loop (create → poll → evaluate → accept)
+  __init__.py            # build_exchange(name) factory
+  base.py                # 5 Abstract interfaces
   coincall/
-    __init__.py
-    auth.py            # Current auth.py logic
-    market_data.py     # Current market_data.py logic
-    executor.py        # Current trade_execution.py order methods
-    account.py         # Current account_manager.py API calls
-    rfq.py             # CoincallRFQExecutor — current rfq.py API methods
-    symbols.py         # Coincall symbol parsing
-  deribit/             # (empty or stubbed — Phase 2)
+    __init__.py          # COINCALL_STATE_MAP + build_coincall()
+    auth.py              # CoincallAuthAdapter
+    market_data.py       # CoincallMarketDataAdapter
+    executor.py          # CoincallExecutorAdapter ("buy"→1, "sell"→2)
+    account.py           # CoincallAccountAdapter
+    rfq.py               # CoincallRFQAdapter
+  deribit/               # (Phase 2)
     __init__.py
 ```
 

@@ -106,7 +106,7 @@ def test_1_time_exit():
 
     # Create a fake trade
     trade = TradeLifecycle(
-        open_legs=[TradeLeg(symbol="BTCUSD-28MAR26-100000-C", qty=0.1, side=1)],
+        open_legs=[TradeLeg(symbol="BTCUSD-28MAR26-100000-C", qty=0.1, side="buy")],
         state=TradeState.OPEN,
     )
     trade.opened_at = time.time() - 3600  # opened 1h ago
@@ -140,20 +140,20 @@ def test_1_time_exit():
 def test_2_straddle_template():
     print("\n--- Test 2: straddle() structure template ---")
 
-    legs = straddle(qty=0.5, dte=0, side=1)
+    legs = straddle(qty=0.5, dte=0, side="buy")
     record("straddle returns 2 legs", len(legs) == 2)
     record("straddle leg 0 is call", legs[0].option_type == "C")
     record("straddle leg 1 is put", legs[1].option_type == "P")
-    record("straddle leg 0 side=buy", legs[0].side == 1)
-    record("straddle leg 1 side=buy", legs[1].side == 1)
+    record("straddle leg 0 side=buy", legs[0].side == "buy")
+    record("straddle leg 1 side=buy", legs[1].side == "buy")
     record("straddle leg qty", legs[0].qty == 0.5 and legs[1].qty == 0.5)
     record("straddle ATM strike", legs[0].strike_criteria == {"type": "closestStrike", "value": 0})
     record("straddle DTE expiry", legs[0].expiry_criteria == {"dte": 0})
     record("straddle underlying", legs[0].underlying == "BTC")
 
     # Sell straddle
-    sell_legs = straddle(qty=0.1, dte=2, side=2)
-    record("sell straddle side", sell_legs[0].side == 2)
+    sell_legs = straddle(qty=0.1, dte=2, side="sell")
+    record("sell straddle side", sell_legs[0].side == "sell")
     record("sell straddle dte=2", sell_legs[0].expiry_criteria == {"dte": 2})
 
 
@@ -164,18 +164,18 @@ def test_2_straddle_template():
 def test_3_strangle_template():
     print("\n--- Test 3: strangle() structure template ---")
 
-    legs = strangle(qty=0.2, call_delta=0.30, put_delta=-0.30, dte=1, side=2)
+    legs = strangle(qty=0.2, call_delta=0.30, put_delta=-0.30, dte=1, side="sell")
     record("strangle returns 2 legs", len(legs) == 2)
     record("strangle leg 0 is call", legs[0].option_type == "C")
     record("strangle leg 1 is put", legs[1].option_type == "P")
-    record("strangle leg 0 side=sell", legs[0].side == 2)
+    record("strangle leg 0 side=sell", legs[0].side == "sell")
     record("strangle call delta", legs[0].strike_criteria == {"type": "delta", "value": 0.30})
     record("strangle put delta", legs[1].strike_criteria == {"type": "delta", "value": -0.30})
     record("strangle DTE", legs[0].expiry_criteria == {"dte": 1})
 
     # Default values
     default_legs = strangle(qty=0.1)
-    record("strangle default side=sell", default_legs[0].side == 2)
+    record("strangle default side=sell", default_legs[0].side == "sell")
     record("strangle default call_delta", default_legs[0].strike_criteria["value"] == 0.25)
     record("strangle default put_delta", default_legs[1].strike_criteria["value"] == -0.25)
     record("strangle default dte=0", default_legs[0].expiry_criteria == {"dte": 0})
@@ -255,7 +255,7 @@ def test_5_max_trades_per_day():
     config = StrategyConfig(
         name="test_daily_limit",
         legs=[
-            LegSpec("C", side=1, qty=0.1,
+            LegSpec("C", side="buy", qty=0.1,
                     strike_criteria={"type": "strike", "value": 100000},
                     expiry_criteria={"symbol": "28MAR26"}),
         ],
@@ -280,7 +280,7 @@ def test_5_max_trades_per_day():
 
     # Create a trade for today → should block
     t = ctx.lifecycle_manager.create(
-        legs=[TradeLeg(symbol="BTCUSD-28MAR26-100000-C", qty=0.1, side=1)],
+        legs=[TradeLeg(symbol="BTCUSD-28MAR26-100000-C", qty=0.1, side="buy")],
         strategy_id="test_daily_limit",
     )
     t.state = TradeState.CLOSED  # Close it so max_concurrent isn't the blocker
@@ -320,7 +320,7 @@ def test_6_on_trade_closed():
     config = StrategyConfig(
         name="test_callback",
         legs=[
-            LegSpec("C", side=1, qty=0.1,
+            LegSpec("C", side="buy", qty=0.1,
                     strike_criteria={"type": "strike", "value": 100000},
                     expiry_criteria={"symbol": "28MAR26"}),
         ],
@@ -343,7 +343,7 @@ def test_6_on_trade_closed():
 
     # Create a trade and close it
     t = ctx.lifecycle_manager.create(
-        legs=[TradeLeg(symbol="BTCUSD-28MAR26-100000-C", qty=0.1, side=1)],
+        legs=[TradeLeg(symbol="BTCUSD-28MAR26-100000-C", qty=0.1, side="buy")],
         strategy_id="test_callback",
     )
 
@@ -363,7 +363,7 @@ def test_6_on_trade_closed():
 
     # FAILED trade also fires callback
     t2 = ctx.lifecycle_manager.create(
-        legs=[TradeLeg(symbol="BTCUSD-28MAR26-90000-P", qty=0.1, side=1)],
+        legs=[TradeLeg(symbol="BTCUSD-28MAR26-90000-P", qty=0.1, side="buy")],
         strategy_id="test_callback",
     )
     t2.state = TradeState.FAILED
@@ -385,7 +385,7 @@ def test_7_stats():
     config = StrategyConfig(
         name="test_stats",
         legs=[
-            LegSpec("C", side=1, qty=0.1,
+            LegSpec("C", side="buy", qty=0.1,
                     strike_criteria={"type": "strike", "value": 100000},
                     expiry_criteria={"symbol": "28MAR26"}),
         ],
@@ -410,7 +410,7 @@ def test_7_stats():
 
     # Create and close trades
     t1 = ctx.lifecycle_manager.create(
-        legs=[TradeLeg(symbol="BTCUSD-28MAR26-100000-C", qty=0.1, side=1)],
+        legs=[TradeLeg(symbol="BTCUSD-28MAR26-100000-C", qty=0.1, side="buy")],
         strategy_id="test_stats",
     )
     t1.state = TradeState.CLOSED
@@ -418,7 +418,7 @@ def test_7_stats():
     t1.closed_at = time.time()
 
     t2 = ctx.lifecycle_manager.create(
-        legs=[TradeLeg(symbol="BTCUSD-28MAR26-90000-P", qty=0.1, side=1)],
+        legs=[TradeLeg(symbol="BTCUSD-28MAR26-90000-P", qty=0.1, side="buy")],
         strategy_id="test_stats",
     )
     t2.state = TradeState.CLOSED
@@ -432,7 +432,7 @@ def test_7_stats():
 
     # FAILED trades NOT counted in closed stats
     t3 = ctx.lifecycle_manager.create(
-        legs=[TradeLeg(symbol="BTCUSD-28MAR26-80000-C", qty=0.1, side=1)],
+        legs=[TradeLeg(symbol="BTCUSD-28MAR26-80000-C", qty=0.1, side="buy")],
         strategy_id="test_stats",
     )
     t3.state = TradeState.FAILED

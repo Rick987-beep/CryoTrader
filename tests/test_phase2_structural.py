@@ -185,7 +185,7 @@ router2 = ExecutionRouter(
 )
 
 trade = TradeLifecycle(
-    open_legs=[TradeLeg(symbol="BTCUSD-TEST-100000-C", qty=0.1, side=1)],
+    open_legs=[TradeLeg(symbol="BTCUSD-TEST-100000-C", qty=0.1, side="buy")],
     execution_mode="limit",
 )
 
@@ -212,7 +212,7 @@ print("\n=== Test 6: ExecutionRouter limit close ===")
 _te_mod.get_option_orderbook = _fake_orderbook
 close_trade = TradeLifecycle(
     open_legs=[
-        TradeLeg(symbol="BTCUSD-TEST-100000-C", qty=0.1, side=1, filled_qty=0.1, fill_price=500.0),
+        TradeLeg(symbol="BTCUSD-TEST-100000-C", qty=0.1, side="buy", filled_qty=0.1, fill_price=500.0),
     ],
     execution_mode="limit",
     state=TradeState.OPEN,
@@ -233,7 +233,7 @@ check("close trade state is CLOSING", close_trade.state == TradeState.CLOSING)
 check("close legs created", len(close_trade.close_legs) == 1)
 check(
     "close leg has opposite side",
-    close_trade.close_legs[0].side == 2,  # original was buy (1), close is sell (2)
+    close_trade.close_legs[0].side == "sell",  # original was buy, close is sell
 )
 check("fill manager stored for close", "_close_fill_mgr" in close_trade.metadata)
 check(
@@ -250,7 +250,7 @@ print("\n=== Test 7: Close circuit breaker ===")
 
 breaker_trade = TradeLifecycle(
     open_legs=[
-        TradeLeg(symbol="BTCUSD-TEST-CB", qty=0.1, side=1, filled_qty=0.1, fill_price=500.0),
+        TradeLeg(symbol="BTCUSD-TEST-CB", qty=0.1, side="buy", filled_qty=0.1, fill_price=500.0),
     ],
     execution_mode="limit",
     state=TradeState.OPEN,
@@ -385,7 +385,7 @@ rec = om_persist.place_order(
     leg_index=0,
     purpose=OP.OPEN_LEG,
     symbol="BTCUSD-PERSIST-TEST",
-    side=1,
+    side="buy",
     qty=0.5,
     price=100.0,
 )
@@ -421,7 +421,7 @@ print("\n=== Test 13: Execution mode auto-detection ===")
 
 # Single-leg → always "limit"
 single_trade = TradeLifecycle(
-    open_legs=[TradeLeg(symbol="BTCUSD-TEST-AUTO", qty=0.1, side=1)],
+    open_legs=[TradeLeg(symbol="BTCUSD-TEST-AUTO", qty=0.1, side="buy")],
 )
 mode = router._determine_execution_mode(single_trade)
 check("single leg → limit", mode == "limit")
@@ -429,8 +429,8 @@ check("single leg → limit", mode == "limit")
 # Multi-leg with no orderbook data → "limit" fallback (notional=0 < threshold)
 multi_trade = TradeLifecycle(
     open_legs=[
-        TradeLeg(symbol="BTCUSD-TEST-AUTO-1", qty=0.1, side=1),
-        TradeLeg(symbol="BTCUSD-TEST-AUTO-2", qty=0.1, side=2),
+        TradeLeg(symbol="BTCUSD-TEST-AUTO-1", qty=0.1, side="buy"),
+        TradeLeg(symbol="BTCUSD-TEST-AUTO-2", qty=0.1, side="sell"),
     ],
 )
 mode2 = router._determine_execution_mode(multi_trade)

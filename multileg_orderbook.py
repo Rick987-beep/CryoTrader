@@ -128,7 +128,7 @@ class LegChunkState:
         fill_times: List of times when partial fills occurred
     """
     symbol: str
-    side: int
+    side: str
     total_qty: float
     filled_qty: float = 0.0
     starting_position: float = 0.0
@@ -216,14 +216,14 @@ class SmartOrderbookExecutor:
     Usage:
         executor = SmartOrderbookExecutor()
         legs = [
-            TradeLeg(symbol="BTCUSD-28FEB26-100000-C", qty=1.0, side=1),
-            TradeLeg(symbol="BTCUSD-28FEB26-105000-P", qty=1.0, side=2),
+            TradeLeg(symbol="BTCUSD-28FEB26-100000-C", qty=1.0, side="buy"),
+            TradeLeg(symbol="BTCUSD-28FEB26-105000-P", qty=1.0, side="sell"),
         ]
         config = SmartExecConfig(chunk_count=5, time_per_chunk=30)
         result = executor.execute_smart_multi_leg(legs, config)
     """
 
-    def __init__(self, get_positions=None):
+    def __init__(self, get_positions=None, executor=None):
         """Initialize smart orderbook executor.
 
         Args:
@@ -231,8 +231,10 @@ class SmartOrderbookExecutor:
                 dicts (each with 'symbol' and 'qty' keys).  If not provided,
                 position tracking is skipped and only order-based fill
                 detection is used.
+            executor: Optional ExchangeExecutor adapter.  If not provided,
+                a raw TradeExecutor is created (Coincall-only).
         """
-        self._executor = TradeExecutor()
+        self._executor = executor or TradeExecutor()
         self._active_chunks: Dict[int, ChunkState] = {}
         self._get_positions = get_positions or (lambda: [])
 
@@ -747,7 +749,7 @@ class SmartOrderbookExecutor:
     def _get_aggressive_limit_price(
         self,
         symbol: str,
-        side: int
+        side: str
     ) -> Optional[float]:
         """
         Get aggressive limit price that crosses the spread.
@@ -758,7 +760,7 @@ class SmartOrderbookExecutor:
         
         Args:
             symbol: Option symbol
-            side: 1=buy, 2=sell
+            side: "buy" or "sell"
             
         Returns:
             Aggressive price or None if market data unavailable
@@ -781,7 +783,7 @@ class SmartOrderbookExecutor:
                 return None
             
             # Cross the spread for immediate fill
-            if side == 1:  # Buy - lift the offer
+            if side == "buy":  # Buy - lift the offer
                 return best_ask
             else:  # Sell - hit the bid
                 return best_bid
@@ -793,7 +795,7 @@ class SmartOrderbookExecutor:
     def _calculate_quote_price(
         self,
         symbol: str,
-        side: int,
+        side: str,
         config: SmartExecConfig
     ) -> Optional[float]:
         """
@@ -807,7 +809,7 @@ class SmartOrderbookExecutor:
         
         Args:
             symbol: Option symbol
-            side: 1=buy, 2=sell
+            side: "buy" or "sell"
             config: Execution config
             
         Returns:
@@ -836,7 +838,7 @@ class SmartOrderbookExecutor:
             
             # Calculate quote based on strategy
             if config.quoting_strategy == "top_of_book":
-                if side == 1:  # Buy - quote at bid (join the bid)
+                if side == "buy":  # Buy - quote at bid (join the bid)
                     quote_price = best_bid
                     logger.debug(f"[Quote] {symbol} BUY @ bid {quote_price}")
                 else:  # Sell - quote at ask (join the ask)
@@ -845,7 +847,7 @@ class SmartOrderbookExecutor:
                     
             elif config.quoting_strategy == "top_of_book_offset_pct":
                 offset = config.spread_pct / 100.0
-                if side == 1:  # Buy - bid with offset
+                if side == "buy":  # Buy - bid with offset
                     quote_price = best_bid * (1 + offset)
                     logger.debug(f"[Quote] {symbol} BUY @ bid+{config.spread_pct}% = {quote_price}")
                 else:  # Sell - ask with offset

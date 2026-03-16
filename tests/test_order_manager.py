@@ -131,11 +131,11 @@ print("=== Test 1: Idempotent placement ===")
 om, mock = fresh_om()
 r1 = om.place_order(
     lifecycle_id="trade-1", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-100000-C", side=1, qty=0.1, price=500.0,
+    symbol="BTCUSD-28MAR26-100000-C", side="buy", qty=0.1, price=500.0,
 )
 r2 = om.place_order(
     lifecycle_id="trade-1", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-100000-C", side=1, qty=0.1, price=500.0,
+    symbol="BTCUSD-28MAR26-100000-C", side="buy", qty=0.1, price=500.0,
 )
 
 check("first placement returns a record", r1 is not None)
@@ -155,7 +155,7 @@ print("\n=== Test 2: Placement records correct fields ===")
 om, mock = fresh_om()
 r = om.place_order(
     lifecycle_id="trade-2", leg_index=1, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-90000-P", side=2, qty=0.5, price=300.0,
+    symbol="BTCUSD-28MAR26-90000-P", side="sell", qty=0.5, price=300.0,
 )
 
 check("order_id is set", r is not None and r.order_id != "")
@@ -163,7 +163,7 @@ check("lifecycle_id correct", r.lifecycle_id == "trade-2")
 check("leg_index correct", r.leg_index == 1)
 check("purpose correct", r.purpose == OrderPurpose.OPEN_LEG)
 check("symbol correct", r.symbol == "BTCUSD-28MAR26-90000-P")
-check("side correct", r.side == 2)
+check("side correct", r.side == "sell")
 check("qty correct", r.qty == 0.5)
 check("price correct", r.price == 300.0)
 check("status is PENDING", r.status == OrderStatus.PENDING)
@@ -182,7 +182,7 @@ om, mock = fresh_om()
 # CLOSE_LEG — caller passes reduce_only=False, but it should be forced True
 r_close = om.place_order(
     lifecycle_id="trade-3", leg_index=0, purpose=OrderPurpose.CLOSE_LEG,
-    symbol="BTCUSD-28MAR26-100000-C", side=2, qty=0.1, price=500.0,
+    symbol="BTCUSD-28MAR26-100000-C", side="sell", qty=0.1, price=500.0,
     reduce_only=False,
 )
 check("CLOSE_LEG record has reduce_only=True", r_close is not None and r_close.reduce_only)
@@ -194,7 +194,7 @@ check("executor called with reduce_only=True for CLOSE_LEG",
 # UNWIND — same behavior
 r_unwind = om.place_order(
     lifecycle_id="trade-3", leg_index=1, purpose=OrderPurpose.UNWIND,
-    symbol="BTCUSD-28MAR26-90000-P", side=1, qty=0.1, price=300.0,
+    symbol="BTCUSD-28MAR26-90000-P", side="buy", qty=0.1, price=300.0,
     reduce_only=False,
 )
 check("UNWIND record has reduce_only=True", r_unwind is not None and r_unwind.reduce_only)
@@ -206,7 +206,7 @@ check("executor called with reduce_only=True for UNWIND",
 # OPEN_LEG — should respect caller's choice
 r_open = om.place_order(
     lifecycle_id="trade-3", leg_index=2, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-80000-C", side=1, qty=0.1, price=400.0,
+    symbol="BTCUSD-28MAR26-80000-C", side="buy", qty=0.1, price=400.0,
     reduce_only=False,
 )
 check("OPEN_LEG respects reduce_only=False", r_open is not None and not r_open.reduce_only)
@@ -224,14 +224,14 @@ om.MAX_ORDERS_PER_LIFECYCLE = 3  # Lower for testing
 for i in range(3):
     r = om.place_order(
         lifecycle_id="trade-cap", leg_index=i, purpose=OrderPurpose.OPEN_LEG,
-        symbol=f"BTCUSD-28MAR26-{80000 + i * 1000}-C", side=1, qty=0.1, price=100.0,
+        symbol=f"BTCUSD-28MAR26-{80000 + i * 1000}-C", side="buy", qty=0.1, price=100.0,
     )
     check(f"order {i+1}/3 placed", r is not None)
 
 # 4th should be refused
 r4 = om.place_order(
     lifecycle_id="trade-cap", leg_index=3, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-83000-C", side=1, qty=0.1, price=100.0,
+    symbol="BTCUSD-28MAR26-83000-C", side="buy", qty=0.1, price=100.0,
 )
 check("4th order refused (hard cap)", r4 is None)
 
@@ -247,24 +247,24 @@ om.MAX_PENDING_PER_SYMBOL = 2  # Lower for testing
 
 r_a = om.place_order(
     lifecycle_id="trade-sym-1", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-100000-C", side=1, qty=0.1, price=500.0,
+    symbol="BTCUSD-28MAR26-100000-C", side="buy", qty=0.1, price=500.0,
 )
 r_b = om.place_order(
     lifecycle_id="trade-sym-2", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-100000-C", side=1, qty=0.1, price=510.0,
+    symbol="BTCUSD-28MAR26-100000-C", side="buy", qty=0.1, price=510.0,
 )
 check("first two orders placed for same symbol", r_a is not None and r_b is not None)
 
 r_c = om.place_order(
     lifecycle_id="trade-sym-3", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-100000-C", side=1, qty=0.1, price=520.0,
+    symbol="BTCUSD-28MAR26-100000-C", side="buy", qty=0.1, price=520.0,
 )
 check("3rd order for same symbol refused", r_c is None)
 
 # Different symbol should still work
 r_d = om.place_order(
     lifecycle_id="trade-sym-3", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-90000-P", side=2, qty=0.1, price=300.0,
+    symbol="BTCUSD-28MAR26-90000-P", side="sell", qty=0.1, price=300.0,
 )
 check("different symbol still works", r_d is not None)
 
@@ -278,7 +278,7 @@ print("\n=== Test 6: cancel_order ===")
 om, mock = fresh_om()
 r = om.place_order(
     lifecycle_id="trade-cancel", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-100000-C", side=1, qty=0.1, price=500.0,
+    symbol="BTCUSD-28MAR26-100000-C", side="buy", qty=0.1, price=500.0,
 )
 check("order placed", r is not None)
 check("order is live before cancel", r.is_live)
@@ -292,7 +292,7 @@ check("terminal_at is set", r.terminal_at is not None)
 # Active slot should be cleared — can place a new order for same key
 r2 = om.place_order(
     lifecycle_id="trade-cancel", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-100000-C", side=1, qty=0.1, price=510.0,
+    symbol="BTCUSD-28MAR26-100000-C", side="buy", qty=0.1, price=510.0,
 )
 check("replacement order placed after cancel", r2 is not None and r2.order_id != r.order_id)
 
@@ -306,7 +306,7 @@ print("\n=== Test 7: requote_order ===")
 om, mock = fresh_om()
 r1 = om.place_order(
     lifecycle_id="trade-rq", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-100000-C", side=1, qty=0.5, price=500.0,
+    symbol="BTCUSD-28MAR26-100000-C", side="buy", qty=0.5, price=500.0,
 )
 check("initial order placed", r1 is not None)
 
@@ -329,7 +329,7 @@ print("\n=== Test 8: requote fully-filled order ===")
 om, mock = fresh_om()
 r = om.place_order(
     lifecycle_id="trade-rq-filled", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-100000-C", side=1, qty=0.1, price=500.0,
+    symbol="BTCUSD-28MAR26-100000-C", side="buy", qty=0.1, price=500.0,
 )
 # Simulate full fill on exchange
 mock.simulate_fill(r.order_id, filled_qty=0.1, avg_price=499.0, full=True)
@@ -348,7 +348,7 @@ print("\n=== Test 9: poll_order ===")
 om, mock = fresh_om()
 r = om.place_order(
     lifecycle_id="trade-poll", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-100000-C", side=1, qty=1.0, price=500.0,
+    symbol="BTCUSD-28MAR26-100000-C", side="buy", qty=1.0, price=500.0,
 )
 
 # Simulate partial fill
@@ -376,11 +376,11 @@ print("\n=== Test 10: poll_all ===")
 om, mock = fresh_om()
 r1 = om.place_order(
     lifecycle_id="trade-pa", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-100000-C", side=1, qty=0.1, price=500.0,
+    symbol="BTCUSD-28MAR26-100000-C", side="buy", qty=0.1, price=500.0,
 )
 r2 = om.place_order(
     lifecycle_id="trade-pa", leg_index=1, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-90000-P", side=2, qty=0.2, price=300.0,
+    symbol="BTCUSD-28MAR26-90000-P", side="sell", qty=0.2, price=300.0,
 )
 
 # Fill r1, leave r2 as NEW
@@ -410,7 +410,7 @@ print("\n=== Test 11: get_filled_for_leg aggregation ===")
 om, mock = fresh_om()
 r1 = om.place_order(
     lifecycle_id="trade-agg", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-100000-C", side=1, qty=1.0, price=500.0,
+    symbol="BTCUSD-28MAR26-100000-C", side="buy", qty=1.0, price=500.0,
 )
 # Simulate partial fill before requote
 mock.simulate_fill(r1.order_id, filled_qty=0.3, avg_price=499.0, full=False)
@@ -440,7 +440,7 @@ check("no live orders initially", not om.has_live_orders("trade-x", OrderPurpose
 
 r = om.place_order(
     lifecycle_id="trade-x", leg_index=0, purpose=OrderPurpose.CLOSE_LEG,
-    symbol="BTCUSD-28MAR26-100000-C", side=2, qty=0.1, price=500.0,
+    symbol="BTCUSD-28MAR26-100000-C", side="sell", qty=0.1, price=500.0,
 )
 check("has live orders after placement", om.has_live_orders("trade-x", OrderPurpose.CLOSE_LEG))
 check("no live OPEN_LEG orders", not om.has_live_orders("trade-x", OrderPurpose.OPEN_LEG))
@@ -458,16 +458,16 @@ print("\n=== Test 13: cancel_all_for ===")
 om, mock = fresh_om()
 om.place_order(
     lifecycle_id="trade-caf", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-100000-C", side=1, qty=0.1, price=500.0,
+    symbol="BTCUSD-28MAR26-100000-C", side="buy", qty=0.1, price=500.0,
 )
 om.place_order(
     lifecycle_id="trade-caf", leg_index=1, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-90000-P", side=2, qty=0.1, price=300.0,
+    symbol="BTCUSD-28MAR26-90000-P", side="sell", qty=0.1, price=300.0,
 )
 # Different lifecycle — should NOT be cancelled
 om.place_order(
     lifecycle_id="trade-other", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-80000-C", side=1, qty=0.1, price=200.0,
+    symbol="BTCUSD-28MAR26-80000-C", side="buy", qty=0.1, price=200.0,
 )
 
 count = om.cancel_all_for("trade-caf")
@@ -497,11 +497,11 @@ try:
     om, mock = fresh_om()
     r1 = om.place_order(
         lifecycle_id="trade-persist", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
-        symbol="BTCUSD-28MAR26-100000-C", side=1, qty=0.5, price=500.0,
+        symbol="BTCUSD-28MAR26-100000-C", side="buy", qty=0.5, price=500.0,
     )
     r2 = om.place_order(
         lifecycle_id="trade-persist", leg_index=1, purpose=OrderPurpose.OPEN_LEG,
-        symbol="BTCUSD-28MAR26-90000-P", side=2, qty=0.3, price=300.0,
+        symbol="BTCUSD-28MAR26-90000-P", side="sell", qty=0.3, price=300.0,
     )
     # Fill r2 — should NOT appear in snapshot (terminal)
     mock.simulate_fill(r2.order_id, filled_qty=0.3, avg_price=299.0, full=True)
@@ -543,7 +543,7 @@ try:
     om, mock = fresh_om()
     r = om.place_order(
         lifecycle_id="trade-log", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
-        symbol="BTCUSD-28MAR26-100000-C", side=1, qty=0.1, price=500.0,
+        symbol="BTCUSD-28MAR26-100000-C", side="buy", qty=0.1, price=500.0,
     )
     om.cancel_order(r.order_id)
 
@@ -574,7 +574,7 @@ print("\n=== Test 16: Requote with partial fill ===")
 om, mock = fresh_om()
 r1 = om.place_order(
     lifecycle_id="trade-rq-partial", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-100000-C", side=1, qty=1.0, price=500.0,
+    symbol="BTCUSD-28MAR26-100000-C", side="buy", qty=1.0, price=500.0,
 )
 # Partially fill 0.4 of 1.0
 mock.simulate_fill(r1.order_id, filled_qty=0.4, avg_price=499.0, full=False)
@@ -598,7 +598,7 @@ record = OrderRecord(
     leg_index=2,
     purpose=OrderPurpose.CLOSE_LEG,
     symbol="BTCUSD-28MAR26-100000-C",
-    side=2,
+    side="sell",
     qty=0.5,
     price=500.0,
     reduce_only=True,
@@ -633,19 +633,23 @@ print("\n=== Test 18: Reconciliation ===")
 om, mock = fresh_om()
 r1 = om.place_order(
     lifecycle_id="trade-recon", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
-    symbol="BTCUSD-28MAR26-100000-C", side=1, qty=0.1, price=500.0,
+    symbol="BTCUSD-28MAR26-100000-C", side="buy", qty=0.1, price=500.0,
 )
 
 # Exchange shows our order + an orphan
 exchange_orders = [
-    {"orderId": r1.order_id},
-    {"orderId": "999999"},  # orphan — not in our ledger
+    {"order_id": r1.order_id},
+    {"order_id": "999999"},  # orphan — not in our ledger
 ]
 warnings = om.reconcile(exchange_orders)
 check("orphan detected", any("999999" in w for w in warnings))
 check("our order not flagged", not any(r1.order_id in w and "not found" in w for w in warnings))
 
 # Now simulate exchange showing our order as gone
+# Backdate placed_at so it's outside the 30s grace period, and mark as LIVE
+# (reconcile skips PENDING orders and recently-placed orders)
+r1.placed_at = r1.placed_at - 60
+r1.status = OrderStatus.LIVE
 exchange_orders_empty = []
 warnings2 = om.reconcile(exchange_orders_empty)
 check("phantom ledger order detected", any(r1.order_id in w for w in warnings2))

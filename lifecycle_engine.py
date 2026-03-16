@@ -53,7 +53,7 @@ class LifecycleEngine:
 
         # Create a trade
         trade = engine.create(
-            legs=[TradeLeg(symbol="BTCUSD-20FEB26-70000-C", qty=0.01, side=1)],
+            legs=[TradeLeg(symbol="BTCUSD-20FEB26-70000-C", qty=0.01, side="buy")],
             exit_conditions=[profit_target(50), max_hold_hours(48)],
             execution_mode="limit",
         )
@@ -71,11 +71,14 @@ class LifecycleEngine:
         self,
         rfq_notional_threshold: float = 50000.0,
         account_manager: Optional[AccountManager] = None,
+        executor=None,
+        rfq_executor=None,
+        exchange_state_map: dict = None,
     ):
         self._trades: Dict[str, TradeLifecycle] = {}
-        self._executor = TradeExecutor()
-        self._rfq_executor = RFQExecutor()
-        self._order_manager = OrderManager(self._executor)
+        self._executor = executor or TradeExecutor()
+        self._rfq_executor = rfq_executor or RFQExecutor()
+        self._order_manager = OrderManager(self._executor, exchange_state_map=exchange_state_map)
         self._account_manager = account_manager
         self._tick_counter: int = 0
         self._last_reconciliation_warnings: List[str] = []

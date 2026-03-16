@@ -46,7 +46,7 @@ def make_order(order_id, status=OrderStatus.LIVE, **kwargs):
     defaults = dict(
         order_id=order_id, lifecycle_id="trade-1", leg_index=0,
         purpose=OrderPurpose.OPEN_LEG, symbol="BTCUSD-11MAR26-90000-C",
-        side=1, qty=0.01, price=100.0, placed_at=time.time(),
+        side="buy", qty=0.01, price=100.0, placed_at=time.time(),
     )
     defaults.update(kwargs)
     r = OrderRecord(**defaults)
@@ -153,7 +153,7 @@ class TestReconciliationLogic(unittest.TestCase):
 
     def test_clean_reconciliation(self):
         order = make_order("111", status=OrderStatus.LIVE)
-        exchange = [{"orderId": "111"}]
+        exchange = [{"order_id": "111"}]
         engine = self._make_engine_with_orders([order], exchange)
 
         engine._run_reconciliation()
@@ -163,7 +163,7 @@ class TestReconciliationLogic(unittest.TestCase):
 
     def test_orphan_detected_and_cancelled(self):
         # Exchange has order "999" but ledger doesn't
-        exchange = [{"orderId": "999"}]
+        exchange = [{"order_id": "999"}]
         engine = self._make_engine_with_orders([], exchange)
         engine._executor.cancel_order = MagicMock(return_value=True)
 

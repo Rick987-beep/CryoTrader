@@ -79,7 +79,7 @@ class TradeLeg:
     """
     symbol: str
     qty: float
-    side: int               # 1 = buy, 2 = sell
+    side: str               # "buy" or "sell"
 
     # Populated after order placement
     order_id: Optional[str] = None
@@ -92,22 +92,25 @@ class TradeLeg:
     position_id: Optional[str] = None
 
     def __post_init__(self):
-        """Ensure fill_price is always float (API may return strings)."""
+        """Ensure fill_price is always float and side is normalized."""
         if self.fill_price is not None:
             self.fill_price = float(self.fill_price)
+        # Backward compat: convert legacy int side (1/2) to string
+        if isinstance(self.side, int):
+            self.side = "buy" if self.side == 1 else "sell"
 
     @property
     def is_filled(self) -> bool:
         return self.filled_qty >= self.qty
 
     @property
-    def close_side(self) -> int:
+    def close_side(self) -> str:
         """Opposite side for closing this leg."""
-        return 2 if self.side == 1 else 1
+        return "sell" if self.side == "buy" else "buy"
 
     @property
     def side_label(self) -> str:
-        return "buy" if self.side == 1 else "sell"
+        return self.side
 
 
 # Type alias for exit condition callables
@@ -200,8 +203,8 @@ class TradeLifecycle:
         """PnL if the structure were closed at current best bid/ask prices.
 
         For each open leg, fetches the live orderbook and uses:
-          - best BID for legs we'd SELL to close  (long positions, side=1)
-          - best ASK for legs we'd BUY to close   (short positions, side=2)
+          - best BID for legs we'd SELL to close  (long positions, side="buy")
+          - best ASK for legs we'd BUY to close   (short positions, side="sell")
 
         Returns the net PnL vs entry fills, or None if any orderbook is
         unavailable (safety — the calling condition should not trigger).
@@ -225,9 +228,9 @@ class TradeLifecycle:
             bids = orderbook.get('bids', [])
             asks = orderbook.get('asks', [])
 
-            # To close: long (side=1) → sell → need bid;
-            #           short (side=2) → buy back → need ask
-            if leg.side == 1:  # long — close by selling
+            # To close: long (side="buy") → sell → need bid;
+            #           short (side="sell") → buy back → need ask
+            if leg.side == "buy":  # long — close by selling
                 if not bids:
                     logger.debug(
                         f"[{self.id}] executable_pnl: no bids for {leg.symbol}"
@@ -251,9 +254,9 @@ class TradeLifecycle:
             qty = leg.filled_qty if leg.filled_qty > 0 else leg.qty
             entry_price = float(leg.fill_price)
 
-            # PnL per leg: for a BUY (side=1), profit = (close - entry) * qty
-            #              for a SELL (side=2), profit = (entry - close) * qty
-            if leg.side == 1:
+            # PnL per leg: for a BUY (side="buy"), profit = (close - entry) * qty
+            #              for a SELL (side="sell"), profit = (entry - close) * qty
+            if leg.side == "buy":
                 total_exit_value += (close_price - entry_price) * qty
             else:
                 total_exit_value += (entry_price - close_price) * qty
@@ -287,7 +290,7 @@ class TradeLifecycle:
         total = 0.0
         for leg in self.open_legs:
             if leg.fill_price is not None:
-                sign = 1 if leg.side == 1 else -1  # buy = debit, sell = credit
+                sign = 1 if leg.side == "buy" else -1  # buy = debit, sell = credit
                 total += sign * float(leg.fill_price) * leg.filled_qty
         return total
 
@@ -301,7 +304,7 @@ class TradeLifecycle:
         total = 0.0
         for leg in self.close_legs:
             if leg.fill_price is not None:
-                sign = 1 if leg.side == 1 else -1
+                sign = 1 if leg.side == "buy" else -1
                 total += sign * float(leg.fill_price) * leg.filled_qty
         return total
 

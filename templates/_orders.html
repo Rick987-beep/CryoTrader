@@ -35,7 +35,7 @@
     {% for o in live_orders %}
     <tr>
       <td>{{ o.symbol }}</td>
-      <td>{{ 'BUY' if o.side == 1 else 'SELL' }}</td>
+      <td>{{ o.side|upper }}</td>
       <td>{{ o.purpose.value }}</td>
       <td>{{ o.qty }}</td>
       <td>{{ "%.4f"|format(o.price) }}</td>
@@ -73,7 +73,7 @@
       {% for o in recent_terminal %}
       <tr>
         <td>{{ o.symbol }}</td>
-        <td>{{ 'BUY' if o.side == 1 else 'SELL' }}</td>
+        <td>{{ o.side|upper }}</td>
         <td>{{ o.purpose.value }}</td>
         <td>{{ o.filled_qty }}/{{ o.qty }}</td>
         <td>{{ "%.4f"|format(o.avg_fill_price or 0) }}</td>

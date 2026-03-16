@@ -54,7 +54,7 @@ class LegSpec:
         underlying: Underlying asset (default "BTC")
     """
     option_type: str
-    side: int
+    side: str
     qty: float
     strike_criteria: dict
     expiry_criteria: dict
@@ -731,7 +731,7 @@ def _find_rank(options: list, delta: dict, rank_by: str, index_price: float, opt
 def straddle(
     qty: float,
     dte = "next",
-    side: int = 1,
+    side: str = "buy",
     underlying: str = "BTC",
 ) -> List[LegSpec]:
     """
@@ -740,7 +740,7 @@ def straddle(
     Args:
         qty: Contract quantity per leg.
         dte: Days to expiry (0 = today / 0DTE).
-        side: 1 = buy, 2 = sell.
+        side: "buy" or "sell".
         underlying: Underlying asset.
 
     Returns:
@@ -771,7 +771,7 @@ def straddle(
 def straddle(
     qty: float,
     dte = "next",
-    side: int = 1,
+    side: str = "buy",
     underlying: str = "BTC",
 ) -> List[LegSpec]:
     """
@@ -783,7 +783,7 @@ def straddle(
     Args:
         qty: Contract quantity per leg.
         dte: Days to expiry — "next" for nearest available, or int (0=0DTE, 1=1DTE, …).
-        side: 1 = buy (long straddle), 2 = sell (short straddle).
+        side: "buy" (long straddle) or "sell" (short straddle).
         underlying: Underlying asset.
 
     Returns:
@@ -816,7 +816,7 @@ def strangle(
     call_delta: float = 0.25,
     put_delta: float = -0.25,
     dte = "next",
-    side: int = 2,
+    side: str = "sell",
     underlying: str = "BTC",
 ) -> List[LegSpec]:
     """
@@ -827,7 +827,7 @@ def strangle(
         call_delta: Target delta for the call leg (positive).
         put_delta: Target delta for the put leg (negative).
         dte: Days to expiry (0 = today / 0DTE).
-        side: 1 = buy, 2 = sell.
+        side: "buy" or "sell".
         underlying: Underlying asset.
 
     Returns:

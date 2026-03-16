@@ -23,7 +23,7 @@ Usage:
         leg_index=0,
         purpose=OrderPurpose.OPEN_LEG,
         symbol="BTCUSD-28MAR26-100000-C",
-        side=1,
+        side="buy",
         qty=0.1,
         price=500.0,
     )
@@ -117,7 +117,7 @@ class OrderRecord:
 
     # Order details (immutable after placement)
     symbol: str = ""
-    side: int = 1
+    side: str = "buy"
     qty: float = 0.0
     price: float = 0.0
     reduce_only: bool = False
@@ -168,6 +168,10 @@ class OrderRecord:
 
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "OrderRecord":
+        raw_side = d.get("side", "buy")
+        # Backward compat: convert legacy int side (1/2) to string
+        if isinstance(raw_side, int):
+            raw_side = "buy" if raw_side == 1 else "sell"
         return OrderRecord(
             order_id=d["order_id"],
             client_order_id=d.get("client_order_id"),
@@ -175,7 +179,7 @@ class OrderRecord:
             leg_index=d.get("leg_index", 0),
             purpose=OrderPurpose(d.get("purpose", "open_leg")),
             symbol=d.get("symbol", ""),
-            side=d.get("side", 1),
+            side=raw_side,
             qty=d.get("qty", 0.0),
             price=d.get("price", 0.0),
             reduce_only=d.get("reduce_only", False),
@@ -203,12 +207,15 @@ class OrderManager:
     MAX_ORDERS_PER_LIFECYCLE: int = 30
     MAX_PENDING_PER_SYMBOL: int = 4
 
-    def __init__(self, executor: Any):
+    def __init__(self, executor: Any, exchange_state_map: dict = None):
         """
         Args:
-            executor: TradeExecutor instance (or mock for testing).
+            executor: ExchangeExecutor instance (or mock for testing).
+            exchange_state_map: Mapping of exchange state codes to OrderStatus.
+                Defaults to Coincall state map if not provided.
         """
         self._executor = executor
+        self._state_map = exchange_state_map if exchange_state_map is not None else _EXCHANGE_STATE_MAP
         self._orders: Dict[str, OrderRecord] = {}  # order_id → record
         # Secondary index: (lifecycle_id, leg_index, purpose) → order_id
         self._active_by_key: Dict[Tuple[str, int, str], str] = {}
@@ -222,7 +229,7 @@ class OrderManager:
         leg_index: int,
         purpose: OrderPurpose,
         symbol: str,
-        side: int,
+        side: str,
         qty: float,
         price: float,
         reduce_only: bool = False,
@@ -325,7 +332,7 @@ class OrderManager:
         self.persist_event(order_id, "placed")
         logger.info(
             f"OrderManager: placed order {order_id} — "
-            f"{symbol} {'buy' if side == 1 else 'sell'} {qty} @ {price} "
+            f"{symbol} {side} {qty} @ {price} "
             f"({purpose.value}, lifecycle={lifecycle_id}, leg={leg_index})"
         )
         return record
@@ -485,7 +492,7 @@ class OrderManager:
             # Map exchange state to our status
             state_code = info.get("state")
             if state_code is not None:
-                new_status = _EXCHANGE_STATE_MAP.get(int(state_code))
+                new_status = self._state_map.get(int(state_code))
                 if new_status and new_status != record.status:
                     old_status = record.status
                     record.status = new_status

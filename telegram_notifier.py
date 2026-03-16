@@ -151,7 +151,7 @@ class TelegramNotifier:
     ) -> None:
         """Notify when a new trade is opened."""
         legs_text = "\n".join(
-            f"  {'BUY' if leg.side == 1 else 'SELL'} {leg.qty}× {leg.symbol}"
+            f"  {leg.side.upper()} {leg.qty}× {leg.symbol}"
             for leg in legs
         )
         self.send(
@@ -177,7 +177,7 @@ class TelegramNotifier:
         legs_text = ""
         if close_legs:
             legs_text = "\n" + "\n".join(
-                f"  {'SELL' if leg.side == 2 else 'BUY'} {leg.filled_qty}× {leg.symbol} @ ${leg.fill_price}"
+                f"  {leg.side.upper()} {leg.filled_qty}× {leg.symbol} @ ${leg.fill_price}"
                 for leg in close_legs
             ) + "\n"
         self.send(

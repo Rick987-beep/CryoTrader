@@ -71,7 +71,7 @@ def _on_trade_opened(trade, account) -> None:
     ts = datetime.now(timezone.utc).strftime("%H:%M UTC")
     entry_cost = trade.total_entry_cost()
     legs_text = "\n".join(
-        f"  {'BUY' if leg.side == 1 else 'SELL'} {leg.qty}× {leg.symbol}"
+        f"  {leg.side.upper()} {leg.qty}× {leg.symbol}"
         for leg in trade.open_legs
     )
     try:
@@ -112,7 +112,7 @@ def _on_trade_closed(trade, account) -> None:
     legs_text = ""
     if trade.close_legs:
         legs_text = "\n".join(
-            f"  {'SELL' if leg.side == 2 else 'BUY'} {leg.filled_qty}× {leg.symbol} @ ${leg.fill_price}"
+            f"  {leg.side.upper()} {leg.filled_qty}× {leg.symbol} @ ${leg.fill_price}"
             for leg in trade.close_legs
         ) + "\n"
     try:
@@ -150,7 +150,7 @@ def atm_straddle() -> StrategyConfig:
         legs=straddle(
             qty=QTY,
             dte=DTE,
-            side=1,          # 1 = BUY (long straddle)
+            side="buy",      # "buy" = long straddle
         ),
 
         # ── When to enter ────────────────────────────────────────────────

@@ -23,10 +23,10 @@ ctx = build_context()
 config = StrategyConfig(
     name="short_strangle_daily",
     legs=[
-        LegSpec("C", side=2, qty=0.1,
+        LegSpec("C", side="sell", qty=0.1,
                 strike_criteria={"type": "delta", "value": 0.25},
                 expiry_criteria={"symbol": "28MAR26"}),
-        LegSpec("P", side=2, qty=0.1,
+        LegSpec("P", side="sell", qty=0.1,
                 strike_criteria={"type": "delta", "value": -0.25},
                 expiry_criteria={"symbol": "28MAR26"}),
     ],
@@ -61,7 +61,7 @@ ctx = build_context()
 
 config = StrategyConfig(
     name="daily_0dte_straddle",
-    legs=straddle(qty=0.1, dte=0, side=1),       # Buy ATM call + put, 0DTE
+    legs=straddle(qty=0.1, dte=0, side="buy"),   # Buy ATM call + put, 0DTE
     entry_conditions=[
         time_window(9, 10),                        # Open 09:00-09:59 UTC
         min_available_margin_pct(30),
@@ -103,7 +103,7 @@ ctx.position_monitor.start()
 ### Structure Templates
 | Helper | Signature | Description |
 |--------|-----------|-------------|
-| `straddle(qty, dte, side, underlying)` | `→ list[LegSpec]` | ATM call + ATM put (same strike). `dte=0` for 0DTE, `side=1` buy / `side=2` sell |
+| `straddle(qty, dte, side, underlying)` | `→ list[LegSpec]` | ATM call + ATM put (same strike). `dte=0` for 0DTE, `side="buy"` / `side="sell"` |
 | `strangle(qty, call_delta, put_delta, dte, side, underlying)` | `→ list[LegSpec]` | OTM call + OTM put by delta targets. Default: 0.25 / -0.25, sell |
 
 ### DTE-Based Expiry Selection
@@ -320,7 +320,7 @@ ctx = build_context()
 # Strategies interact via StrategyConfig — never touch LifecycleEngine directly
 config = StrategyConfig(
     name="example",
-    legs=strangle(qty=0.01, side=1),
+    legs=strangle(qty=0.01, side="buy"),
     exit_conditions=[profit_target(50), max_hold_hours(4)],
     execution_mode="limit",
 )
@@ -385,7 +385,7 @@ record = om.place_order(
     leg_index=0,
     purpose=OrderPurpose.OPEN_LEG,
     symbol="BTCUSD-28MAR26-100000-C",
-    side=1, qty=0.1, price=500.0,
+    side="buy", qty=0.1, price=500.0,
 )
 
 # Requote (atomic cancel + replace + chain)
@@ -506,7 +506,7 @@ from trade_lifecycle import RFQParams, profit_target, max_hold_hours
 
 config = StrategyConfig(
     name="patient_strangle",
-    legs=strangle(qty=0.01, call_delta=0.15, put_delta=-0.15, dte="next", side=1),
+    legs=strangle(qty=0.01, call_delta=0.15, put_delta=-0.15, dte="next", side="buy"),
     execution_mode="limit",
     execution_params=ExecutionParams(phases=[
         ExecutionPhase(pricing="mark",       duration_seconds=300, reprice_interval=30),
@@ -709,9 +709,9 @@ smart_config = SmartExecConfig(
 
 # Define multi-leg structure
 legs = [
-    TradeLeg(symbol="BTCUSD-27FEB26-80000-C", qty=0.2, side=1),  # BUY
-    TradeLeg(symbol="BTCUSD-27FEB26-82000-C", qty=0.4, side=2),  # SELL
-    TradeLeg(symbol="BTCUSD-27FEB26-84000-C", qty=0.2, side=1),  # BUY
+    TradeLeg(symbol="BTCUSD-27FEB26-80000-C", qty=0.2, side="buy"),   # BUY
+    TradeLeg(symbol="BTCUSD-27FEB26-82000-C", qty=0.4, side="sell"),  # SELL
+    TradeLeg(symbol="BTCUSD-27FEB26-84000-C", qty=0.2, side="buy"),   # BUY
 ]
 
 # Execute with smart chunking
