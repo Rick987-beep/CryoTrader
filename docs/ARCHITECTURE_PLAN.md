@@ -1,8 +1,8 @@
 # CoincallTrader Architecture & Development Plan
 
-**Version:** 5.0  
-**Date:** March 13, 2026  
-**Status:** v1.1.0 — Daily Put Sell Strategy + EMA Filter + Phased RFQ
+**Version:** 6.0  
+**Date:** March 17, 2026  
+**Status:** v1.4.0-wip — Deribit Migration Phase 2 Complete (Testnet Validated)
 
 ---
 
@@ -12,11 +12,12 @@ This document outlines the transformation of CoincallTrader from a simple option
 
 ---
 
-## Current State (v1.0.0)
+## Current State (v1.4.0-wip)
 
 ### Implemented
-- ✅ **Authentication** — HMAC-SHA256 signing (`auth.py`), JSON + form-urlencoded
-- ✅ **Configuration** — Environment switching via `.env`, strategy params in code (`config.py`)
+- ✅ **Authentication** — HMAC-SHA256 signing (`auth.py`) for Coincall; OAuth2 token lifecycle (`exchanges/deribit/auth.py`) for Deribit
+- ✅ **Exchange Abstraction** — 5 abstract base classes (`exchanges/base.py`), Coincall adapters (`exchanges/coincall/`), Deribit adapters (`exchanges/deribit/`), factory (`exchanges/__init__.py`). Core modules receive adapters via DI.
+- ✅ **Configuration** — Environment switching via `.env`, strategy params in code (`config.py`), `EXCHANGE` env var for exchange selection
 - ✅ **Market data** — Option chains, orderbooks, BTC price, option details; 30s TTL cache (`market_data.py`)
 - ✅ **Option selection** — Expiry/strike/delta filtering + `LegSpec` declarative resolution + compound `find_option()` + DTE-based expiry + `straddle()` / `strangle()` templates (`option_selection.py`)
 - ✅ **Order execution** — Limit orders with phased pricing (mark → mid → aggressive) via `ExecutionPhase` / `ExecutionParams`; `LimitFillManager` routes through `OrderManager` when present (`trade_execution.py`)
@@ -96,6 +97,15 @@ CoincallTrader/
 ├── health_check.py         # HealthChecker: background health logging every 5 minutes
 ├── telegram_notifier.py    # Telegram Bot API notifications (fire-and-forget, strategy opt-in)
 ├── dashboard.py            # Web dashboard (Flask + htmx, daemon thread)
+├── exchanges/              # Exchange abstraction layer (v1.3.0+)
+│   ├── __init__.py         # build_exchange(name) factory
+│   ├── base.py             # 5 abstract base classes (ExchangeAuth, ExchangeMarketData, etc.)
+│   ├── coincall/           # Coincall adapters (5 files wrapping existing modules)
+│   │   ├── auth.py, market_data.py, executor.py, account.py, rfq.py
+│   │   └── __init__.py     # COINCALL_STATE_MAP + build_coincall()
+│   └── deribit/            # Deribit adapters (4 files, OAuth2 + BTC-native pricing)
+│       ├── auth.py, market_data.py, executor.py, account.py
+│       └── __init__.py     # DERIBIT_STATE_MAP + build_deribit()
 ├── templates/              # Dashboard HTML templates (Jinja2 + htmx)
 │   ├── dashboard.html      # Main page with auto-polling panels
 │   ├── login.html          # Password login
@@ -109,7 +119,8 @@ CoincallTrader/
 │   ├── blueprint_strangle.py  # Blueprint strategy — starting template for traders
 │   ├── atm_straddle.py        # Daily ATM straddle with profit target + time exit
 │   ├── atm_straddle_index_move.py  # ATM straddle with BTC index move exit
-│   └── daily_put_sell.py      # Daily OTM put sell — EMA filter, phased RFQ, limit TP, mark SL
+│   ├── daily_put_sell.py      # Daily OTM put sell — EMA filter, phased RFQ, limit TP, mark SL
+│   └── smoke_test_strangle.py # Quick validation strangle (0.1 BTC, 60s hold) for exchange testing
 ├── requirements.txt
 ├── .env                    # API keys + dashboard password (gitignored)
 ├── docs/
@@ -125,11 +136,15 @@ CoincallTrader/
 │   ├── test_atm_straddle.py         # 34 ATM straddle strategy unit tests
 │   ├── test_execution_timing.py     # 40 ExecutionPhase, RFQParams, phased execution
 │   └── test_dashboard.py            # Standalone dashboard test with mock data
+├── tests/deribit/           # Deribit integration tests (25 tests, live testnet)
+│   ├── test_deribit_auth.py, test_deribit_market_data.py, test_deribit_account.py
+│   ├── test_deribit_orders.py, test_deribit_symbols.py
+│   └── conftest.py
 ├── logs/                   # Runtime logs + order audit (gitignored)
 └── archive/                # Legacy code (gitignored)
 ```
 
-**Current size:** 21 Python modules + 7 HTML templates, ~10,000 lines total
+**Current size:** 21 core Python modules + 11 exchange adapter modules + 7 HTML templates, ~12,000 lines total
 
 ### Future additions (when needed)
 - `persistence/` — SQLite state storage and crash recovery
@@ -645,6 +660,50 @@ See [ORDER_MANAGEMENT_PLAN.md](ORDER_MANAGEMENT_PLAN.md) for the original design
 
 ---
 
+### Phase 10: Deribit Migration ✅ PHASE 2 COMPLETE (March 17, 2026)
+**Goal:** Migrate from Coincall to Deribit exchange via an exchange abstraction layer.
+
+See [MIGRATION_PLAN_DERIBIT.md](MIGRATION_PLAN_DERIBIT.md) for the full migration plan, API field reference, and implementation record.
+
+**Phase 1 — Exchange Abstraction Layer (March 16):**
+- `exchanges/base.py` — 5 ABCs: `ExchangeAuth`, `ExchangeMarketData`, `ExchangeExecutor`, `ExchangeAccountManager`, `ExchangeRFQExecutor`
+- `exchanges/__init__.py` — `build_exchange(name)` factory
+- `exchanges/coincall/` — 5 thin adapter classes wrapping existing modules
+- Side encoding normalized: `"buy"` / `"sell"` strings everywhere; int → string at adapter boundary
+- `config.py` — `EXCHANGE` env var (default: `"coincall"`)
+- All 379 tests passing on Coincall path (no behavior changes)
+
+**Phase 2a — Deribit Adapters (March 16-17):**
+- `exchanges/deribit/auth.py` — OAuth2 client_credentials + refresh_token; 900s TTL, lazy refresh at 80%
+- `exchanges/deribit/market_data.py` — BTC-native orderbook prices; USD conversion for display
+- `exchanges/deribit/executor.py` — Separate buy/sell endpoints; `_snap_to_tick()` for variable tick sizes
+- `exchanges/deribit/account.py` — USD-denominated via `total_equity_usd`; unsigned size + direction normalization
+- 25 integration tests passing against live Deribit testnet
+
+**Phase 2b — Exchange-Agnostic Refactor (March 17):**
+- 6 core modules refactored for DI: `option_selection`, `execution_router`, `trade_execution`, `lifecycle_engine`, `account_manager`, `strategy`
+- 3 "generic" modules turned out to have hidden Coincall imports: `health_check`, `trade_lifecycle`, `main`
+- 5 bug fix iterations on testnet (orderbook format, BTC pricing, round precision, min qty, hidden imports)
+
+**Phase 2c — Testnet Validation (March 17):**
+- Full trade lifecycle: option selection → buy orders filled → 60s hold → sell orders filled → CLOSED
+- Instruments: BTC-18MAR26-75000-C @ 0.0033, BTC-18MAR26-73500-P @ 0.0034
+- Total: 122 tests passing (97 unit + 25 integration)
+
+**Next — Phase 3 (Production Cutover):**
+- Paper trade on testnet for extended period
+- Verify crash recovery with new DI pattern
+- Switch to production credentials with reduced size
+- Scale to full position size
+
+**Next — Phase 4 (Optimization):**
+- WebSocket market data + order placement
+- Combo instrument support
+- Block RFQ (when positions scale to ≥25 BTC)
+- Portfolio margin optimization
+
+---
+
 ## Priority Order Summary
 
 | Priority | Phase | Effort | Why This Order |
@@ -658,8 +717,9 @@ See [ORDER_MANAGEMENT_PLAN.md](ORDER_MANAGEMENT_PLAN.md) for the original design
 | 7 | **Phase 7: Dashboard** | ✅ Done | Web monitoring + controls (Flask + htmx) |
 | 8 | **Phase 8: Persistence** | ✅ Partial | Trade snapshots + order ledger; SQLite remaining |
 | 9 | **Phase 9: Order Management** | ✅ Done | Central order ledger + structural split |
+| 10 | **Phase 10: Deribit Migration** | ✅ Phase 2 Done | Exchange abstraction + adapters + testnet validation |
 
-**Total estimated effort:** 15-22 days of focused development (12-14 days completed)
+**Total estimated effort:** 17-24 days of focused development (14-16 days completed)
 
 ---
 

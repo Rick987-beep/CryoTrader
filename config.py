@@ -84,6 +84,27 @@ BASE_URL = ACTIVE_CONFIG['base_url']
 API_KEY = ACTIVE_CONFIG['api_key']
 API_SECRET = ACTIVE_CONFIG['api_secret']
 
+# =============================================================================
+# DERIBIT CONFIGURATION
+# =============================================================================
+
+DERIBIT_TESTNET = {
+    'base_url': 'https://test.deribit.com',
+    'client_id': os.getenv('DERIBIT_CLIENT_ID_TEST'),
+    'client_secret': os.getenv('DERIBIT_CLIENT_SECRET_TEST'),
+}
+
+DERIBIT_PRODUCTION = {
+    'base_url': 'https://www.deribit.com',
+    'client_id': os.getenv('DERIBIT_CLIENT_ID_PROD'),
+    'client_secret': os.getenv('DERIBIT_CLIENT_SECRET_PROD'),
+}
+
+DERIBIT_CONFIG = DERIBIT_TESTNET if ENVIRONMENT == 'testnet' else DERIBIT_PRODUCTION
+DERIBIT_BASE_URL = DERIBIT_CONFIG['base_url']
+DERIBIT_CLIENT_ID = DERIBIT_CONFIG['client_id']
+DERIBIT_CLIENT_SECRET = DERIBIT_CONFIG['client_secret']
+
 
 # =============================================================================
 # CONFIGURATION VALIDATION
@@ -91,21 +112,18 @@ API_SECRET = ACTIVE_CONFIG['api_secret']
 
 def validate_config():
     """Validate that all required configuration is present"""
-    required_keys = ['API_KEY', 'API_SECRET']
-    missing = []
+    if EXCHANGE == 'coincall':
+        required = {'API_KEY': API_KEY, 'API_SECRET': API_SECRET}
+    else:
+        required = {'DERIBIT_CLIENT_ID': DERIBIT_CLIENT_ID,
+                     'DERIBIT_CLIENT_SECRET': DERIBIT_CLIENT_SECRET}
 
-    for key in required_keys:
-        value = globals().get(key)
-        if not value:
-            missing.append(key)
-
+    missing = [k for k, v in required.items() if not v]
     if missing:
         env_str = f"({ENVIRONMENT} mode)" if ENVIRONMENT else ""
         raise ValueError(
-            f"Missing required API credentials {env_str}: {', '.join(missing)}\n"
-            f"Please set environment variables in .env file:\n"
-            f"  For testnet: COINCALL_API_KEY_TEST, COINCALL_API_SECRET_TEST\n"
-            f"  For production: COINCALL_API_KEY_PROD, COINCALL_API_SECRET_PROD"
+            f"Missing required API credentials for {EXCHANGE} {env_str}: {', '.join(missing)}\n"
+            f"Please set environment variables in .env file."
         )
 
 
@@ -114,6 +132,11 @@ validate_config()
 
 # Print configuration status
 print(f"[CONFIG] Deployment: {DEPLOYMENT_TARGET.upper()}")
+print(f"[CONFIG] Exchange: {EXCHANGE.upper()}")
 print(f"[CONFIG] Environment: {ENVIRONMENT.upper()}")
-print(f"[CONFIG] Base URL: {BASE_URL}")
-print(f"[CONFIG] API Key: {API_KEY[:20]}..." if API_KEY else "[CONFIG] API Key: NOT SET")
+if EXCHANGE == 'coincall':
+    print(f"[CONFIG] Base URL: {BASE_URL}")
+    print(f"[CONFIG] API Key: {API_KEY[:20]}..." if API_KEY else "[CONFIG] API Key: NOT SET")
+else:
+    print(f"[CONFIG] Base URL: {DERIBIT_BASE_URL}")
+    print(f"[CONFIG] Client ID: {DERIBIT_CLIENT_ID[:20]}..." if DERIBIT_CLIENT_ID else "[CONFIG] Client ID: NOT SET")

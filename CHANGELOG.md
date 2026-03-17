@@ -5,6 +5,71 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0-wip] - 2026-03-17
+
+### ⚠️ Work in Progress — Deribit Migration Phase 2
+
+Phase 2 (Deribit adapters + exchange-agnostic refactor + testnet validation) is complete.
+Full trade lifecycle validated on Deribit testnet: option selection → buy orders filled → position monitored → sell orders filled → CLOSED.
+Next: Phase 3 (production cutover with real strategy sizes).
+
+### Added
+- **Deribit auth adapter** (`exchanges/deribit/auth.py`) — OAuth2 client_credentials + refresh_token lifecycle. Thread-safe lazy refresh at 80% of 900s TTL.
+- **Deribit market data adapter** (`exchanges/deribit/market_data.py`) — Instruments, ticker, orderbook, index price. BTC-native orderbook prices for executor; USD-converted prices for display/details.
+- **Deribit executor adapter** (`exchanges/deribit/executor.py`) — Separate `/private/buy` and `/private/sell` endpoints. `_snap_to_tick()` handles variable tick sizes (0.0001 below 0.005 BTC, 0.0005 above). `label` field as client order ID.
+- **Deribit account adapter** (`exchanges/deribit/account.py`) — USD-denominated via `total_equity_usd` fields. Unsigned `size` + `direction` → signed qty normalization. Portfolio-level Greeks.
+- **Smoke test strategy** (`strategies/smoke_test_strangle.py`) — Quick validation strangle: 0.1 BTC, ATM ±2 strikes, 60s hold. Purpose-built for exchange integration testing.
+
+### Changed
+- **Exchange-agnostic refactor** — 6 core modules refactored to accept exchange adapters via dependency injection instead of importing Coincall modules directly:
+  - `option_selection.py` — `market_data` parameter on selection functions
+  - `execution_router.py` — `market_data` in constructor
+  - `trade_execution.py` — `market_data` in `LimitFillManager`
+  - `lifecycle_engine.py` — Passes `market_data` to router + fill manager; sets `_market_data` on create/restore
+  - `account_manager.py` — `PositionMonitor` receives `account_manager` adapter
+  - `strategy.py` — Wires all adapters through `build_context()`
+- **`health_check.py`** — Now accepts `market_data` adapter; uses `get_index_price()` instead of Coincall's hardcoded `get_btc_index_price()`
+- **`trade_lifecycle.py`** — Added `_market_data` field; `executable_pnl()` uses injected adapter instead of importing Coincall's `get_option_orderbook()`
+- **`main.py`** — Wires `market_data` adapter into `HealthChecker`; builds exchange components from factory
+
+### Fixed
+- **Orderbook format mismatch** (`exchanges/deribit/market_data.py`) — Deribit returns `[[price, amount]]`; code expected `[{"price": x, "qty": y}]`. Adapter now returns dict format with BTC-native prices.
+- **USD vs BTC price confusion** — Orderbook initially converted all prices to USD; executor expects BTC. Fixed: orderbook returns BTC-native prices; `mark` field stays USD for display.
+- **Wrong BTC index price** — `health_check.py` imported Coincall's `get_btc_index_price()` returning $67,456 while Deribit's actual index was $74,405. Fixed via market_data DI injection.
+- **`trade_lifecycle.py` Coincall import** — `executable_pnl()` imported `from market_data import get_option_orderbook` (Coincall's module). Fixed via `_market_data` adapter field.
+- **BTC price truncation** — `round(x, 2)` in `LimitFillManager` truncated BTC prices like 0.0035 → 0.00. Removed all `round(x, 2)` from price path; executor's `_snap_to_tick()` handles precision.
+- **Min order size rejected** — `qty=0.01` below Deribit minimum 0.1 BTC. Updated smoke test QTY to 0.1.
+
+### Test Results
+| Suite | Count | Status |
+|-------|-------|--------|
+| Unit tests (8 suites) | 97 | ✅ All passing |
+| Deribit integration (5 suites) | 25 | ✅ All passing |
+| **Total** | **122** | **✅** |
+
+### End-to-End Validation (Deribit Testnet)
+```
+Strategy:     smoke_test_strangle (0.1 BTC, ATM ±2 strikes, 60s hold)
+Instruments:  BTC-18MAR26-75000-C @ 0.0033, BTC-18MAR26-73500-P @ 0.0034
+Result:       Open → FILLED → 60s hold → Close → FILLED → CLOSED (PnL ≈ $0.00)
+Debug cycles: 5 iterations from first run to success
+```
+
+### Files
+- NEW: `exchanges/deribit/__init__.py`, `auth.py`, `market_data.py`, `executor.py`, `account.py`
+- NEW: `tests/deribit/test_deribit_auth.py`, `test_deribit_market_data.py`, `test_deribit_account.py`, `test_deribit_orders.py`, `test_deribit_symbols.py`
+- NEW: `strategies/smoke_test_strangle.py`
+- MODIFIED: `option_selection.py`, `execution_router.py`, `trade_execution.py`, `lifecycle_engine.py`, `account_manager.py`, `strategy.py`
+- MODIFIED: `health_check.py`, `trade_lifecycle.py`, `main.py`
+- MODIFIED: `docs/MIGRATION_PLAN_DERIBIT.md` (rewritten for Phase 2 completion)
+
+### Known Issues
+- Orphaned positions from killed bot runs are not recovered on restart
+- `rfq.py` still imports Coincall modules directly (not behind abstraction)
+- Coincall path not live-tested since the exchange-agnostic refactor
+
+---
+
 ## [1.3.0-wip] - 2026-03-16
 
 ### ⚠️ Work in Progress — Deribit Migration Phase 1

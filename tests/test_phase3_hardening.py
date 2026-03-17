@@ -63,9 +63,7 @@ class TestReconciliationWiring(unittest.TestCase):
 
     def _make_engine(self):
         """Create a LifecycleEngine with mocked internals."""
-        with patch("lifecycle_engine.TradeExecutor"), \
-             patch("lifecycle_engine.RFQExecutor"), \
-             patch("lifecycle_engine.OrderManager") as MockOM, \
+        with patch("lifecycle_engine.OrderManager") as MockOM, \
              patch("lifecycle_engine.ExecutionRouter"):
             mock_am = MagicMock()
             engine = LifecycleEngine(account_manager=mock_am)
@@ -106,9 +104,7 @@ class TestReconciliationWiring(unittest.TestCase):
         self.assertEqual(engine._run_reconciliation.call_count, 3)
 
     def test_reconciliation_skipped_without_account_manager(self):
-        with patch("lifecycle_engine.TradeExecutor"), \
-             patch("lifecycle_engine.RFQExecutor"), \
-             patch("lifecycle_engine.OrderManager"), \
+        with patch("lifecycle_engine.OrderManager"), \
              patch("lifecycle_engine.ExecutionRouter"):
             engine = LifecycleEngine(account_manager=None)
             engine._order_manager.poll_all = MagicMock()
@@ -130,14 +126,13 @@ class TestReconciliationLogic(unittest.TestCase):
     """Verify _run_reconciliation handles orphans and stale entries."""
 
     def _make_engine_with_orders(self, ledger_orders=None, exchange_orders=None):
-        with patch("lifecycle_engine.TradeExecutor") as MockExec, \
-             patch("lifecycle_engine.RFQExecutor"), \
-             patch("lifecycle_engine.OrderManager") as MockOM, \
+        with patch("lifecycle_engine.OrderManager") as MockOM, \
              patch("lifecycle_engine.ExecutionRouter"):
             mock_am = MagicMock()
             mock_am.get_open_orders.return_value = exchange_orders or []
+            mock_executor = MagicMock()
 
-            engine = LifecycleEngine(account_manager=mock_am)
+            engine = LifecycleEngine(account_manager=mock_am, executor=mock_executor)
 
             # Set up real OrderManager.reconcile with real orders
             real_om = OrderManager.__new__(OrderManager)
@@ -218,9 +213,7 @@ class TestReconciliationLogic(unittest.TestCase):
         self.assertIsNotNone(engine.last_reconciliation_time)
 
     def test_reconciliation_survives_api_error(self):
-        with patch("lifecycle_engine.TradeExecutor"), \
-             patch("lifecycle_engine.RFQExecutor"), \
-             patch("lifecycle_engine.OrderManager"), \
+        with patch("lifecycle_engine.OrderManager"), \
              patch("lifecycle_engine.ExecutionRouter"):
             mock_am = MagicMock()
             mock_am.get_open_orders.side_effect = Exception("API timeout")
@@ -381,18 +374,14 @@ class TestEngineAccountManager(unittest.TestCase):
     """Verify LifecycleEngine accepts optional account_manager."""
 
     def test_default_no_account_manager(self):
-        with patch("lifecycle_engine.TradeExecutor"), \
-             patch("lifecycle_engine.RFQExecutor"), \
-             patch("lifecycle_engine.OrderManager"), \
+        with patch("lifecycle_engine.OrderManager"), \
              patch("lifecycle_engine.ExecutionRouter"):
             engine = LifecycleEngine()
         self.assertIsNone(engine._account_manager)
 
     def test_with_account_manager(self):
         mock_am = MagicMock()
-        with patch("lifecycle_engine.TradeExecutor"), \
-             patch("lifecycle_engine.RFQExecutor"), \
-             patch("lifecycle_engine.OrderManager"), \
+        with patch("lifecycle_engine.OrderManager"), \
              patch("lifecycle_engine.ExecutionRouter"):
             engine = LifecycleEngine(account_manager=mock_am)
         self.assertIs(engine._account_manager, mock_am)

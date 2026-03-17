@@ -420,13 +420,17 @@ def test_5_runner_gating():
 
 def test_6_resolve_legs_live():
     print("\n--- Test 6: resolve_legs with real market data ---")
-    print("  (Calling Coincall API — read-only, no orders placed)")
+    print("  (Calling exchange API — read-only, no orders placed)")
 
     from option_selection import resolve_legs, LegSpec
+    from exchanges import build_exchange
+
+    # Build exchange adapters to get market_data
+    components = build_exchange()
+    market_data = components['market_data']
 
     # First, find a valid expiry by checking available instruments
-    from market_data import get_option_instruments
-    instruments = get_option_instruments("BTC")
+    instruments = market_data.get_option_instruments("BTC")
     if not instruments:
         record("get_option_instruments", False, "No instruments returned")
         return
@@ -476,7 +480,7 @@ def test_6_resolve_legs_live():
     ]
 
     try:
-        resolved = resolve_legs(specs)
+        resolved = resolve_legs(specs, market_data)
         record("resolve_legs succeeded", len(resolved) == 1)
         record("resolved symbol", True, resolved[0].symbol)
         record("resolved qty", resolved[0].qty == 0.1)

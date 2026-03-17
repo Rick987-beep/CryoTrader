@@ -393,12 +393,14 @@ class PositionMonitor:
         monitor.stop()
     """
     
-    def __init__(self, poll_interval: int = 10):
+    def __init__(self, account_manager=None, poll_interval: int = 10):
         """
         Args:
+            account_manager: ExchangeAccountManager adapter (injected by build_context).
+                             Falls back to Coincall AccountManager if not provided.
             poll_interval: Seconds between each refresh (default 10)
         """
-        self._account_mgr = AccountManager()
+        self._account_mgr = account_manager or AccountManager()
         self._poll_interval = poll_interval
         self._latest: Optional[AccountSnapshot] = None
         self._lock = threading.Lock()

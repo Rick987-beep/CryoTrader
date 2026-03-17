@@ -40,10 +40,8 @@ def build_exchange(exchange_name: str = None) -> dict:
         return build_coincall()
 
     elif exchange_name == "deribit":
-        raise NotImplementedError(
-            "Deribit exchange support is coming in Phase 2. "
-            "Set EXCHANGE=coincall (default) for now."
-        )
+        from exchanges.deribit import build_deribit
+        return build_deribit()
 
     else:
         raise ValueError(

@@ -2,8 +2,8 @@
 
 **Author:** Architecture Review  
 **Date:** 15 March 2026  
-**Status:** IN PROGRESS — Phase 1 Complete (v1.3.0-wip)  
-**Last Updated:** 16 March 2026  
+**Status:** Phase 2 Complete — Deribit testnet validated (v1.4.0-wip)  
+**Last Updated:** 17 March 2026  
 **Scope:** Full exchange migration from Coincall to Deribit, with optional dual-exchange support
 
 ---
@@ -14,23 +14,45 @@
 2. [Why Deribit](#2-why-deribit)
 3. [Current Architecture & Coupling Assessment](#3-current-architecture--coupling-assessment)
 4. [Key Differences: Coincall vs Deribit](#4-key-differences-coincall-vs-deribit)
-5. [Proposed Abstraction Layer](#5-proposed-abstraction-layer)
-6. [Module-by-Module Migration Plan](#6-module-by-module-migration-plan)
+5. [Exchange Abstraction Layer](#5-exchange-abstraction-layer)
+6. [What Actually Changed (Implementation Record)](#6-what-actually-changed-implementation-record)
 7. [Contract & Symbol Translation](#7-contract--symbol-translation)
-8. [Execution Model Changes](#8-execution-model-changes)
-9. [Testing Strategy](#9-testing-strategy)
+8. [Pricing Model: BTC-Native vs USD](#8-pricing-model-btc-native-vs-usd)
+9. [Testing Strategy & Results](#9-testing-strategy--results)
 10. [Migration Phases & Sequencing](#10-migration-phases--sequencing)
 11. [Risk Register](#11-risk-register)
-12. [Open Questions & Decisions Required](#12-open-questions--decisions-required)
+12. [Open Items & Known Issues](#12-open-items--known-issues)
 13. [Deribit API Field Reference (Test Findings)](#13-deribit-api-field-reference-test-findings)
 
 ---
 
 ## 1. Executive Summary
 
-This document proposes a plan to migrate the CoincallTrader bot from the Coincall exchange to Deribit, the most liquid crypto options venue in the world. The migration touches **8 of 19 Python modules** at a critical level, **4 at a moderate level**, and leaves **7 modules entirely untouched**. The key architectural move is the introduction of an **Exchange Abstraction Layer** — a set of interfaces that isolate exchange-specific logic (authentication, market data, order management, account queries) behind stable contracts. This lets the strategy layer, lifecycle engine, and all higher-order logic remain unchanged.
+This document tracks the migration of CoincallTrader from the Coincall exchange to Deribit. The migration introduced an **Exchange Abstraction Layer** — five abstract interfaces isolating exchange-specific logic behind stable contracts — and then implemented concrete Deribit adapters behind those interfaces.
 
-The migration is proposed in **four phases**, designed so that each phase is independently testable and the system is never in a broken state for more than one module at a time.
+**Current status (17 March 2026):** Phase 2 is complete. The full trade lifecycle (option selection → order placement → fill detection → position monitoring → PnL tracking → exit condition → close) has been **validated end-to-end on Deribit testnet** with real orders filled. Phase 3 (production cutover) is next.
+
+### Migration Timeline
+
+| Date | Milestone |
+|------|-----------|
+| 15 Mar | Migration plan written; Deribit API study and credential setup |
+| 16 Mar | Phase 1: Exchange Abstraction Layer (5 interfaces, 5 Coincall adapters, side encoding migration) |
+| 16 Mar | Phase 2a: Deribit adapters (auth, market_data, executor, account) + 25 integration tests |
+| 17 Mar | Phase 2b: Exchange-agnostic refactor of 6 core modules (dependency injection) |
+| 17 Mar | Phase 2c: First Deribit testnet run → 5 iterative fix cycles → **full lifecycle validated** |
+
+### What Changed from the Original Plan
+
+| Planned | Actual |
+|---------|--------|
+| 8 modules "critical"; 7 "no changes needed" | `health_check.py`, `main.py`, `trade_lifecycle.py` also needed changes (market_data injection) |
+| Normalized data models (`Instrument`, `OptionTicker`, etc.) | Deferred — adapters return Coincall-compatible dicts with exchange-native fields mapped |
+| RFQ abstraction in Phase 2 | Deferred to Phase 4 — Deribit 25 BTC minimum too large for current strategies |
+| WebSocket in Phase 4 | Unchanged — REST works fine |
+| REST-only Phase 2 | Confirmed — REST polling is sufficient, averaging 60–100ms latency |
+| Parallel Coincall read-only run | Skipped — direct testnet validation was more effective |
+| Core modules exchange-agnostic by design | Required explicit dependency injection pass across 6 modules that had direct `from market_data import ...` |
 
 ---
 
@@ -91,7 +113,6 @@ Every module was assessed for how tightly it depends on Coincall-specific APIs, 
 #### LOW / NONE — No Changes Needed (7 modules)
 | Module | Reason |
 |--------|--------|
-| `lifecycle_engine.py` | Generic state machine; works once ExecutionRouter is abstracted |
 | `position_closer.py` | Generic close phases; delegates to executor/account_manager |
 | `multileg_orderbook.py` | Generic chunking algorithm; delegates to executor |
 | `persistence.py` | Pure file I/O |
@@ -99,10 +120,14 @@ Every module was assessed for how tightly it depends on Coincall-specific APIs, 
 | `ema_filter.py` | Uses Binance public API, not Coincall |
 | `telegram_notifier.py` | Exchange-agnostic notifications |
 | `retry.py` | Generic utility |
-| `health_check.py` | Generic logging |
-| `main.py` | Orchestration; works once `build_context()` is parameterized |
 
-**Bottom line:** ~40% of the codebase needs refactoring. ~60% is already exchange-agnostic.
+> **Post-migration update:** Three modules originally classified as "NO CHANGES" required modification during Phase 2b:
+> - `health_check.py` — imported Coincall's `get_btc_index_price()` directly; now accepts `market_data` adapter via DI
+> - `lifecycle_engine.py` — needed to propagate `market_data`, `executor`, `rfq_executor`, `exchange_state_map` to sub-components
+> - `main.py` — wires `market_data` adapter into `HealthChecker`; builds exchange components
+> - `trade_lifecycle.py` — `executable_pnl()` imported Coincall's `get_option_orderbook()`; now uses `_market_data` field set by `LifecycleEngine`
+>
+> **Revised bottom line:** ~55% of the codebase needed refactoring (up from the original 40% estimate). The "generic" modules turned out to have hidden Coincall imports for convenience functions like index price and orderbook lookups.
 
 ---
 
@@ -236,462 +261,145 @@ Deribit: WebSocket-first design. All private operations can be performed over a 
 
 ---
 
-## 5. Proposed Abstraction Layer
+## 5. Exchange Abstraction Layer
 
-The core architectural change is the introduction of an **Exchange Provider** abstraction. This is a set of Python protocols (or abstract base classes) that define the contract between the strategy/lifecycle layer and the exchange-specific implementation.
-
-### 5.1 Design Principle: Ports and Adapters
+### 5.1 Architecture (Implemented)
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Strategy Layer (unchanged)                             │
+│  Strategy Layer                                         │
 │  StrategyRunner, StrategyConfig, entry/exit conditions  │
 └──────────────────────┬──────────────────────────────────┘
                        │ uses
 ┌──────────────────────▼──────────────────────────────────┐
-│  Core Domain (unchanged)                                │
+│  Core Domain (exchange-agnostic via DI)                 │
 │  LifecycleEngine, ExecutionRouter, OrderManager,        │
-│  TradeLifecycle, TradeLeg, PositionMonitor              │
+│  TradeLifecycle, PositionMonitor, HealthChecker         │
 └──────────────────────┬──────────────────────────────────┘
                        │ depends on (via interfaces)
 ┌──────────────────────▼──────────────────────────────────┐
-│  Exchange Abstraction Layer (NEW)                       │
+│  Exchange Abstraction Layer                             │
 │  ExchangeAuth, ExchangeMarketData, ExchangeExecutor,   │
-│  ExchangeAccountManager                                 │
+│  ExchangeAccountManager, ExchangeRFQExecutor            │
 └──────┬───────────────────────────────────┬──────────────┘
        │                                   │
 ┌──────▼──────────┐              ┌─────────▼─────────┐
 │  Coincall Impl  │              │  Deribit Impl     │
-│  (existing code │              │  (new code)       │
-│   reorganized)  │              │                   │
+│  5 adapters     │              │  4 adapters       │
 └─────────────────┘              └───────────────────┘
 ```
 
-### 5.2 Proposed Interfaces
+### 5.2 Abstract Interfaces (`exchanges/base.py`)
 
-#### `ExchangeAuth`
-Responsible for authenticating API requests. Hides the signing/token mechanism.
+| Interface | Methods | Purpose |
+|-----------|---------|---------|
+| `ExchangeAuth` | `get()`, `post()`, `is_successful()` | Authenticated HTTP client |
+| `ExchangeMarketData` | `get_index_price()`, `get_option_instruments()`, `get_option_details()`, `get_option_orderbook()` | Read-only market queries |
+| `ExchangeExecutor` | `place_order()`, `cancel_order()`, `get_order_status()` | Order lifecycle |
+| `ExchangeAccountManager` | `get_account_info()`, `get_positions()`, `get_open_orders()` | Account + positions |
+| `ExchangeRFQExecutor` | `execute()`, `execute_phased()`, `get_orderbook_cost()` | RFQ/block trades |
 
-```
-Methods:
-  - authenticated_request(method, endpoint, params, body) → response
-  - get_ws_auth_message() → dict  (for future WebSocket auth)
-```
+### 5.3 Coincall Adapters (`exchanges/coincall/`)
 
-The key insight: the rest of the system should never construct HTTP requests directly. It should call `auth.request(...)` and get back parsed JSON. This is already how `auth.py` works today — the abstraction is natural.
+Five thin wrapper classes that delegate to existing Coincall modules. No behavior changes — pure interface compliance. `CoincallExecutorAdapter` converts `"buy"→1, "sell"→2` at the API boundary.
 
-#### `ExchangeMarketData`
-Responsible for all read-only market queries.
+### 5.4 Deribit Adapters (`exchanges/deribit/`)
 
-```
-Methods:
-  - get_index_price(underlying: str) → float
-  - get_option_instruments(underlying: str) → List[Instrument]
-  - get_option_ticker(symbol: str) → OptionTicker  (includes Greeks, mark price, bid/ask)
-  - get_orderbook(symbol: str, depth: int) → Orderbook
-  - get_expiry_dates(underlying: str) → List[date]
-```
+| Adapter | Key Implementation Detail |
+|---------|---------------------------|
+| `DeribitAuth` | OAuth2 client_credentials + refresh_token. 900s TTL. Thread-safe lazy refresh at 80% TTL. All errors are HTTP 400 + JSON error code. |
+| `DeribitMarketDataAdapter` | Instruments, ticker, orderbook, index price. Returns BTC-native prices for orderbook/executor; USD-converted prices for `get_option_details()` (Greeks display). |
+| `DeribitExecutorAdapter` | Separate `/private/buy` and `/private/sell` endpoints. `_snap_to_tick()` handles variable tick sizes (0.0001 below 0.005 BTC, 0.0005 above). `label` field = client order ID. |
+| `DeribitAccountAdapter` | USD-denominated via `total_equity_usd` fields. Unsigned `size` + `direction` → signed qty. Position Greeks are total (already portfolio-level). |
 
-Where `Instrument`, `OptionTicker`, and `Orderbook` are **normalized dataclasses** shared across exchanges. The exchange implementation is responsible for mapping exchange-specific field names into these normalized structures.
+### 5.5 Exchange Factory (`exchanges/__init__.py`)
 
-#### `ExchangeExecutor`
-Responsible for order lifecycle operations.
-
-```
-Methods:
-  - place_order(symbol, side, qty, price, order_type, client_id, reduce_only) → OrderResult
-  - cancel_order(order_id) → bool
-  - get_order_status(order_id) → OrderStatus
-  - get_open_orders() → List[Order]
-```
-
-Where `side` is normalized to `"buy"` / `"sell"` (string, not `1`/`2`), and `OrderStatus` is the internal enum already defined in `order_manager.py`.
-
-#### `ExchangeAccountManager`
-Responsible for account and position queries.
-
-```
-Methods:
-  - get_account_summary() → AccountSummary
-  - get_positions() → List[Position]
-```
-
-Where `AccountSummary` and `Position` are normalized dataclasses with standard field names (`equity`, `available_margin`, `initial_margin`, `maintenance_margin`, `unrealized_pnl`, etc.).
-
-#### `ExchangeRFQExecutor`
-Responsible for the RFQ/block trade lifecycle. This is the key new abstraction that enables RFQ support on both exchanges.
-
-```
-Methods:
-  - create_rfq(legs: List[RFQLeg]) → RFQHandle
-  - get_quotes(rfq_handle: RFQHandle) → RFQQuoteSnapshot
-  - accept_rfq(rfq_handle: RFQHandle, direction: str, price: float) → RFQTradeResult
-  - cancel_rfq(rfq_handle: RFQHandle) → bool
-  - get_rfq_status(rfq_handle: RFQHandle) → RFQState
-  - get_orderbook_cost(legs: List[RFQLeg], direction: str) → Optional[float]
-```
-
-This interface abstracts over the fundamental differences between Coincall and Deribit RFQ systems while preserving the shared lifecycle:
-
-```
-create → poll/subscribe for quotes → evaluate → accept or cancel
-```
-
-The critical design decisions in this abstraction:
-
-**1. `RFQLeg` — Normalized leg representation:**
 ```python
-@dataclass
-class RFQLeg:
-    symbol: str           # Exchange-native symbol
-    direction: str        # "buy" or "sell" (normalized)
-    qty: float            # Quantity in base currency
-```
-Each exchange adapter translates to its own format:
-- Coincall: `{instrumentName, side: "BUY"/"SELL", qty}` 
-- Deribit: `{instrument_name, direction: "buy"/"sell", amount}`
-
-**2. `RFQHandle` — Opaque identifier returned by `create_rfq`:**
-```python
-@dataclass
-class RFQHandle:
-    rfq_id: str                    # Exchange-specific ID (requestId / block_rfq_id)
-    legs: List[RFQLeg]             # Original legs
-    ratios: Optional[List[int]]    # Deribit: GCD-reduced ratios; Coincall: None
-    total_amount: Optional[float]  # Deribit: total amount per ratio unit; Coincall: None
-    combo_id: Optional[str]        # Deribit: recognized strategy combo; Coincall: None
-    expiry_time: int               # Unix ms when RFQ expires
-    state: RFQState
-```
-This handle carries enough context for the taker to cross the RFQ later. On Deribit, the ratios and combo_id are returned by the exchange at creation and must be echoed back at acceptance. On Coincall, these fields are simply None.
-
-**3. `RFQQuoteSnapshot` — What the taker sees:**
-```python
-@dataclass
-class RFQQuoteSnapshot:
-    best_bid: Optional[RFQQuoteLevel]   # Best price if we want to sell
-    best_ask: Optional[RFQQuoteLevel]   # Best price if we want to buy
-    raw_quotes: List[Any]               # Exchange-specific quote details for logging
-    mark_price: Optional[float]         # Structure mark price (if available)
+build_exchange("deribit")  # → {auth, market_data, executor, account_manager, rfq_executor, state_map}
+build_exchange("coincall") # → same shape, Coincall implementations
 ```
 
-@dataclass
-class RFQQuoteLevel:
-    price: float          # Per-unit structure price
-    amount: float         # Available quantity
-    quote_id: Optional[str]  # Coincall: specific quoteId to accept; Deribit: None (crossing by price)
-```
-This normalizes the critical difference: Coincall accepts by `quoteId`, Deribit crosses by `price`+`direction`. The `accept_rfq` method on each implementation knows which field to use.
+Selected via `EXCHANGE` env var (default: `"coincall"`).
 
-**4. `RFQTradeResult` — Execution outcome:**
-```python
-@dataclass
-class RFQTradeResult:
-    success: bool
-    rfq_id: str
-    block_trade_id: Optional[str]       # Deribit: BLOCK-XXXXXX; Coincall: None
-    direction: str                       # "buy" or "sell"
-    price: float                         # Executed structure price
-    amount: float                        # Executed quantity
-    legs: List[RFQTradeLeg]             # Per-leg fill details
-    total_cost: float                    # Net cost (positive=debit, negative=credit)
-    orderbook_cost: Optional[float]      # Comparison baseline
-    improvement_pct: float               # vs orderbook
-    message: str
-```
+### 5.6 Side Encoding
 
-**5. High-level `execute()` remains in the shared layer:**
-
-The current `RFQExecutor.execute()` method — which orchestrates the create → poll → evaluate → accept/cancel loop — is exchange-agnostic in its logic. It becomes a shared function that works with the `ExchangeRFQExecutor` interface:
-
-```
-def execute_rfq(
-    rfq_executor: ExchangeRFQExecutor,
-    legs: List[RFQLeg],
-    direction: str,
-    timeout_seconds: int,
-    min_improvement_pct: float,
-    poll_interval_seconds: int,
-) → RFQTradeResult:
-    # 1. Get orderbook baseline
-    # 2. Create RFQ
-    # 3. Poll for quotes (or listen via callback)
-    # 4. Evaluate best quote vs baseline
-    # 5. Accept or cancel
-```
-
-The phased execution logic (initial wait → mark floor → relax) also lives in the shared layer, parameterized by strategy metadata.
-
-### 5.2.1 RFQ Abstraction — Exchange-Specific Adapters
-
-#### `CoincallRFQExecutor` (wraps current `rfq.py`)
-
-```
-create_rfq(legs):
-    # Translate RFQLeg → {instrumentName, side, qty}
-    # POST /open/option/blocktrade/request/create/v1
-    # Return RFQHandle with requestId
-
-get_quotes(handle):
-    # GET /open/option/blocktrade/request/getQuotesReceived/v1?requestId=X
-    # Parse individual MM quotes, compute costs
-    # Return RFQQuoteSnapshot with best_bid/ask and individual quote_ids
-
-accept_rfq(handle, direction, price):
-    # Find the quote matching direction + best price
-    # POST /open/option/blocktrade/request/accept/v1 {requestId, quoteId}
-    # (Coincall requires specific quoteId)
-
-cancel_rfq(handle):
-    # POST /open/option/blocktrade/request/cancel/v1 {requestId}
-```
-
-#### `DeribitRFQExecutor` (new implementation)
-
-```
-create_rfq(legs):
-    # Translate RFQLeg → {instrument_name, amount, direction}
-    # JSON-RPC: private/create_block_rfq {legs: [...], makers?: [...]}
-    # Return RFQHandle with block_rfq_id, ratios, combo_id, total_amount
-
-get_quotes(handle):
-    # JSON-RPC: private/get_block_rfqs {block_rfq_id}
-    # (or receive via WebSocket subscription block_rfq.taker.{currency})
-    # Parse aggregated bids[]/asks[] into RFQQuoteSnapshot
-    # Note: individual MMs are not visible — only aggregated best quote
-
-accept_rfq(handle, direction, price):
-    # JSON-RPC: private/accept_block_rfq {
-    #   block_rfq_id, direction, price, amount,
-    #   legs: [{instrument_name, ratio, direction}]  ← echo ratios from creation
-    # }
-    # Can use time_in_force: "good_til_cancelled" for trigger orders
-    # (Deribit crosses by price, not by specific quoteId)
-
-cancel_rfq(handle):
-    # JSON-RPC: private/cancel_block_rfq {block_rfq_id}
-```
-
-### 5.2.2 RFQ Abstraction — Design Rationale
-
-**Why not just skip RFQ on Deribit?** Deribit's orderbook is deep enough for most trades. However:
-- For very large positions (25+ BTC options), Block RFQ provides better execution than legging in
-- Block RFQ aggregates liquidity from MMs who may not be quoting on-screen
-- The phased pricing model (multi-maker, last-matched-price) actively incentivizes competitive quotes
-- Block trade fees may differ from on-screen fees
-- Hedge legs allow atomic delta-hedging with a futures position
-
-**Why abstract rather than have two different RFQ modules?** The high-level orchestration (create → poll → evaluate → accept) is identical. Duplicating this logic means duplicating the phased execution strategy, improvement calculation, orderbook comparison, logging, and timeout management. The exchange-specific part is purely the API translation in 4-5 methods.
-
-**Minimum size implications:** Coincall's $50k minimum is easily met by our strategies. Deribit's 25 BTC minimum (≈$2.1M at current prices) is much larger. The `ExecutionRouter` must be aware of this threshold and only route to RFQ when the trade qualifies. For sub-threshold trades, limit orders or the smart orderbook executor are used instead.
-
-### 5.3 Normalized Data Models
-
-A critical part of the abstraction is **normalized data models** that the rest of the system works with:
-
-| Model | Key Fields | Notes |
-|-------|-----------|-------|
-| `Instrument` | `symbol` (exchange-native), `underlying`, `expiry`, `strike`, `option_type`, `is_active` | Parsed from exchange-specific naming |
-| `OptionTicker` | `symbol`, `mark_price`, `bid`, `ask`, `last_price`, `delta`, `gamma`, `theta`, `vega`, `open_interest`, `volume` | Unified Greeks |
-| `Orderbook` | `bids: List[(price, qty)]`, `asks: List[(price, qty)]`, `mark_price` | Standard L2 book |
-| `OrderResult` | `order_id`, `client_id`, `status`, `filled_qty`, `avg_price` | Returned from place/query |
-| `AccountSummary` | `equity`, `available_margin`, `initial_margin`, `maintenance_margin`, `unrealized_pnl`, `currency` | Normalized across exchanges |
-| `Position` | `symbol`, `qty`, `side` ("buy"/"sell"), `avg_price`, `mark_price`, `unrealized_pnl`, `delta`, `gamma`, `vega`, `theta` | Normalized side encoding |
-
-### 5.4 Side Encoding Migration
-
-Today: `1` = buy, `2` = sell (Coincall convention, baked into `TradeLeg`, `order_manager`, and `trade_execution`).
-
-Proposal: Normalize to `"buy"` / `"sell"` strings at the abstraction boundary. The exchange implementations translate:
-- Coincall: `"buy"` → `1`, `"sell"` → `2`
-- Deribit: `"buy"` → calls `/private/buy`, `"sell"` → calls `/private/sell`
-
-The internal data model (`TradeLeg.side`) should migrate to strings. This is a sweeping but mechanical change.
-
-### 5.5 Exchange Factory
-
-A single factory function selects the exchange implementation based on configuration:
-
-```
-EXCHANGE=deribit  (in .env)
-
-build_exchange(exchange_name) → {auth, market_data, executor, account_manager}
-```
-
-This replaces the current `build_context()` wiring in `strategy.py`, making the exchange selection a configuration choice rather than a code change.
+All internal code uses `"buy"` / `"sell"` strings. The int encoding (`1`/`2`) only exists inside `CoincallExecutorAdapter` at the API boundary. Backward compatibility: `TradeLeg.__post_init__` and `OrderRecord.from_dict()` auto-convert legacy int sides from crash-recovery snapshots.
 
 ---
 
-## 6. Module-by-Module Migration Plan
+## 6. What Actually Changed (Implementation Record)
 
-### 6.1 `config.py` — Exchange-Aware Configuration
+This section documents every module that was modified during the migration, what changed, and why.
 
-**Change:** Add `EXCHANGE` env var. Load exchange-specific URLs and credentials based on its value.
+### Phase 1 — Exchange Abstraction Layer (16 March)
 
-```
-EXCHANGE=deribit
+| File | Change | Why |
+|------|--------|-----|
+| `exchanges/base.py` | NEW — 5 ABCs | Define exchange contract |
+| `exchanges/__init__.py` | NEW — `build_exchange()` factory | Route to correct implementation |
+| `exchanges/coincall/*` | NEW — 5 adapter files | Wrap existing Coincall modules behind interfaces |
+| `config.py` | Added `EXCHANGE` env var | Exchange selection |
+| `strategy.py` | `build_context()` uses `build_exchange()` | Wire exchange adapters via DI |
+| `trade_lifecycle.py` | `TradeLeg.side` → string | Normalize side encoding |
+| `order_manager.py` | Accepts `exchange_state_map` parameter | Exchange-specific status mapping |
+| `lifecycle_engine.py` | Accepts `executor`, `rfq_executor`, `exchange_state_map` | DI for exchange components |
+| All strategy files | Side encoding: `1`→`"buy"`, `2`→`"sell"` | String side migration |
+| `templates/_orders.html` | Side display: `o.side\|upper` | String side compat |
+| All 7 test files | Updated mocks for string sides and DI | Test compat |
 
-# Deribit credentials
-DERIBIT_CLIENT_ID=...
-DERIBIT_CLIENT_SECRET=...
+### Phase 2a — Deribit Adapters (16 March)
 
-# Or Coincall credentials (for backward compat)
-COINCALL_API_KEY_PROD=...
-COINCALL_API_SECRET_PROD=...
-```
+| File | Change | Why |
+|------|--------|-----|
+| `exchanges/deribit/auth.py` | NEW — `DeribitAuth` | OAuth2 token lifecycle |
+| `exchanges/deribit/market_data.py` | NEW — `DeribitMarketDataAdapter` | Instrument/ticker/orderbook queries |
+| `exchanges/deribit/executor.py` | NEW — `DeribitExecutorAdapter` | Order placement with tick-size snapping |
+| `exchanges/deribit/account.py` | NEW — `DeribitAccountAdapter` | Account/position normalization |
+| `tests/deribit/test_deribit_*.py` | NEW — 5 test files, 25 integration tests | Validate adapter correctness on live testnet |
 
-The module exports `EXCHANGE`, `BASE_URL`, `WS_URL`, `API_KEY`, `API_SECRET` — resolved from the selected exchange. Downstream modules don't change their imports.
+### Phase 2b — Exchange-Agnostic Refactor (17 March)
 
-### 6.2 `auth.py` → `exchanges/coincall/auth.py`
+The first testnet run revealed that 6 core modules still imported Coincall's `market_data.py` directly, bypassing the exchange adapters entirely. These were refactored to accept `market_data` via dependency injection:
 
-**Change:** Move current auth logic into a Coincall-specific module. Create `exchanges/deribit/auth.py` implementing the same interface with Deribit's OAuth2 token flow.
+| File | Change | Why |
+|------|--------|-----|
+| `option_selection.py` | `market_data` parameter on selection functions | Was importing `from market_data import ...` |
+| `execution_router.py` | `market_data` in constructor | Orderbook queries for routing decisions |
+| `trade_execution.py` | `market_data` in `LimitFillManager` | Orderbook queries for pricing phases |
+| `account_manager.py` | `PositionMonitor` receives `account_manager` adapter | Position/account polling |
+| `strategy.py` | Wires all adapters through `build_context()` | Central DI wiring |
+| `lifecycle_engine.py` | Passes `market_data` to router + fill manager | Propagate DI |
 
-Deribit auth flow:
-1. On startup: POST `/public/auth` with `client_id` + `client_secret` + grant_type `client_credentials`
-2. Receive `access_token` (JWT, ~900s TTL) + `refresh_token`
-3. Before expiry: POST `/public/auth` with `refresh_token` grant to get new access token
-4. All private requests: `Authorization: Bearer <access_token>` header
+### Phase 2c — Testnet Fixes (17 March)
 
-The token refresh can run on a background timer or be checked before each request (lazy refresh).
+Five iterative debug cycles on Deribit testnet revealed and fixed these issues:
 
-### 6.3 `market_data.py` → `exchanges/{exchange}/market_data.py`
+| Issue | Root Cause | Fix |
+|-------|------------|-----|
+| Orderbook format mismatch | Deribit: `[[price, amount]]`; code expected `[{"price", "qty"}]` | `DeribitMarketDataAdapter.get_option_orderbook()` returns dict format |
+| USD vs BTC prices in orderbook | Orderbook initially converted to USD; executor expects BTC | Orderbook returns BTC-native prices; `mark` field stays USD |
+| Wrong BTC index price ($67,456) | `health_check.py` imported Coincall's `get_btc_index_price()` | Injected `market_data` adapter; uses `get_index_price()` → Deribit API |
+| `trade_lifecycle.py` Coincall import | `executable_pnl()` imported `from market_data import get_option_orderbook` | Added `_market_data` field; set by `LifecycleEngine` on create/restore |
+| Price precision (0.0035 → 0.00) | `round(x, 2)` truncated BTC prices | Removed all `round(x, 2)` from `LimitFillManager`; executor's `_snap_to_tick()` handles precision |
+| Min order size rejected | `qty=0.01` below Deribit minimum 0.1 | Updated `smoke_test_strangle.py` QTY to 0.1 |
 
-**Change:** Extract the current Coincall-specific endpoint calls into `exchanges/coincall/market_data.py`. Create `exchanges/deribit/market_data.py` implementing the same `ExchangeMarketData` interface.
+### Files Modified Summary
 
-The existing **caching layer** (TTL cache, 30s) stays in a shared base class or wrapper — caching is exchange-agnostic.
+**New files (Phase 1+2):**
+- `exchanges/base.py`, `exchanges/__init__.py`
+- `exchanges/coincall/` — 6 files (init, auth, market_data, executor, account, rfq)
+- `exchanges/deribit/` — 5 files (init, auth, market_data, executor, account)
+- `tests/deribit/` — 5 integration test files
+- `strategies/smoke_test_strangle.py`
 
-Key mapping:
-
-| Operation | Coincall | Deribit |
-|-----------|----------|---------|
-| Instruments | `/open/option/getInstruments/BTCUSD` | `/public/get_instruments?currency=BTC&kind=option` |
-| Option ticker | Per-option detail call | `/public/ticker?instrument_name=BTC-28MAR26-100000-C` |
-| Greeks | Separate detail call | Included in ticker (`greeks` field) |
-| Index price | `/open/futures/ticker/BTCUSDT` | `/public/get_index_price?index_name=btc_usd` |
-| Orderbook | Orderbook depth endpoint | `/public/get_order_book?instrument_name=...` |
-
-### 6.4 `trade_execution.py` → `exchanges/{exchange}/executor.py`
-
-**Change:** Extract Coincall order placement into `exchanges/coincall/executor.py`. Create `exchanges/deribit/executor.py`.
-
-Key differences to handle:
-- Deribit uses separate `/private/buy` and `/private/sell` endpoints (no `tradeSide` field)
-- Order status is string-based (`"open"`, `"filled"`, `"cancelled"`) not numeric
-- `label` replaces `clientOrderId`
-- `amount` replaces `qty`
-- `reduce_only` (underscore) replaces `reduceOnly` (camelCase)
-
-The `LimitFillManager` and `ExecutionPhase` logic stays in the shared layer — they work with the abstract `ExchangeExecutor` interface.
-
-### 6.5 `order_manager.py` — Parameterized Status Mapping
-
-**Change:** Replace the hardcoded `_EXCHANGE_STATE_MAP` with an exchange-provided mapping. The `OrderManager` itself is exchange-agnostic — it just needs to know how to translate exchange status codes into its internal `OrderStatus` enum.
-
-```
-coincall_status_map = {0: LIVE, 1: FILLED, 2: PARTIAL, 3: CANCELLED, ...}
-deribit_status_map  = {"open": LIVE, "filled": FILLED, "cancelled": CANCELLED, ...}
-```
-
-The exchange implementation provides this map at construction time.
-
-### 6.6 `account_manager.py` → `exchanges/{exchange}/account.py`
-
-**Change:** Extract Coincall account/position API calls. The `PositionMonitor` (background polling thread) and `AccountSnapshot` dataclass stay in the shared layer — they're exchange-agnostic. Only the data-fetching methods move.
-
-Field mapping:
-
-| Concept | Coincall field | Deribit field |
-|---------|---------------|--------------|
-| Equity | `equity` | `equity` |
-| Available margin | `availableMargin` | `available_funds` |
-| Initial margin | `imAmount` | `initial_margin` |
-| Maintenance margin | `mmAmount` | `maintenance_margin` |
-| Unrealized PnL | `upnlByMarkPrice` | `floating_profit_loss` |
-| Position side | `tradeSide` (1/2) | `direction` ("buy"/"sell") |
-| Position symbol | `symbol` | `instrument_name` |
-
-### 6.7 `rfq.py` → Exchange-Abstracted RFQ
-
-**Change:** The current monolithic `rfq.py` is split into:
-
-1. **Shared orchestration** (`rfq_orchestrator.py` or integrated into `execution_router.py`) — the create → poll → evaluate → accept loop, phased execution timing, orderbook comparison, improvement calculation. This is exchange-agnostic.
-
-2. **`exchanges/coincall/rfq.py`** — the Coincall-specific API adapter implementing `ExchangeRFQExecutor`. This is essentially the current `create_rfq()`, `get_quotes()`, `accept_quote()`, `cancel_rfq()` methods, translated to use the normalized data models.
-
-3. **`exchanges/deribit/rfq.py`** — the Deribit Block RFQ adapter implementing `ExchangeRFQExecutor`. New implementation using:
-  - `private/create_block_rfq` for creation
-  - `private/get_block_rfqs` for polling (or WebSocket subscription for Phase 4)
-  - `private/accept_block_rfq` for crossing
-  - `private/cancel_block_rfq` for cancellation
-  - `private/get_leg_prices` for decomposing structure prices into per-leg prices
-
-The `RFQResult` and `RFQState` data classes migrate to the shared `exchanges/base.py` as part of the normalized model.
-
-Key translation work for the Deribit adapter:
-- Convert `RFQLeg` (symbol, direction, qty) → Deribit format (instrument_name, direction, amount)
-- Handle ratio-based pricing: Deribit returns ratios at creation that must be echoed at acceptance
-- Parse aggregated bids/asks into `RFQQuoteSnapshot` (no individual quote IDs on Deribit)
-- Map Deribit RFQ states (`created`, `open`, `filled`, `cancelled`, `expired`) to internal `RFQState` enum
-- Handle Deribit's `combo_id` for recognized strategies (informational, not required for execution)
-
-### 6.8 `execution_router.py` — Exchange-Aware Routing with RFQ
-
-**Change:** The routing decision tree becomes exchange-aware, with RFQ supported on *both* exchanges but with different thresholds:
-
-- **Coincall:** Single leg → limit; multi-leg ≥ $50k notional → RFQ; multi-leg < $50k → smart orderbook
-- **Deribit:** Single leg → limit; multi-leg ≥ 25 BTC → Block RFQ; multi-leg < 25 BTC → smart orderbook / limit
-
-The router receives the RFQ minimum threshold from the exchange configuration:
-
-```python
-class ExchangeConfig:
-    rfq_min_btc_contracts: Optional[float]   # Deribit: 25.0
-    rfq_min_notional_usd: Optional[float]    # Coincall: 50_000
-    rfq_available: bool                      # True on both
-    combo_orders_available: bool             # Deribit: True (Phase 4)
-```
-
-The router calculates whether the trade meets the exchange's RFQ minimum and routes accordingly. For most of our current strategies on Deribit (position sizes well under 25 BTC), trades will route through limit orders. RFQ becomes available for larger positions or when explicitly requested via strategy metadata (`execution_mode: "rfq"`).
-
-**Fallback chain on Deribit:**
-1. If `execution_mode: "rfq"` in metadata AND trade meets minimum → Block RFQ
-2. If multi-leg and combo instrument exists → combo order (Phase 4)
-3. If multi-leg → smart orderbook executor (leg individually)
-4. Single leg → limit order
-
-### 6.9 `option_selection.py` — Parameterized Symbol Parsing
-
-**Change:** Extract the symbol parsing and construction into exchange-specific helpers:
-
-```
-coincall: parse("BTCUSD-28MAR26-100000-C") → Instrument(underlying="BTC", expiry=..., strike=100000, type="C")
-deribit:  parse("BTC-28MAR26-100000-C")    → Instrument(underlying="BTC", expiry=..., strike=100000, type="C")
-```
-
-The selection algorithms (`find_option`, `resolve_legs`, delta-based selection) work on the normalized `Instrument` model and are completely exchange-agnostic.
-
-### 6.10 `trade_lifecycle.py` — Normalize Side Encoding
-
-**Change:** Migrate `TradeLeg.side` from `int` (1/2) to `str` ("buy"/"sell"). This is a mechanical find-and-replace across the codebase, with exchange implementations handling the translation at the boundary.
-
-### 6.11 `strategy.py` — Generic TradingContext
-
-**Change:** Update `TradingContext` to reference abstract types instead of concrete Coincall types:
-
-```
-Before: auth: CoincallAuth, market_data: MarketData, executor: TradeExecutor
-After:  auth: ExchangeAuth, market_data: ExchangeMarketData, executor: ExchangeExecutor
-```
-
-The `build_context()` function reads `EXCHANGE` from config and constructs the appropriate implementation.
-
-### 6.12 Strategies — Minimal Changes
-
-The strategies (`daily_put_sell`, `atm_straddle`, `blueprint_strangle`) need only:
-1. Remove RFQ-specific metadata (or make it conditional on exchange)
-2. Ensure strike selection uses the normalized `ExchangeMarketData` interface
-
-The entry/exit conditions, position sizing, and timing logic are all exchange-agnostic already.
+**Modified files:**
+- `config.py`, `strategy.py`, `main.py`
+- `option_selection.py`, `execution_router.py`, `trade_execution.py`
+- `lifecycle_engine.py`, `account_manager.py`, `order_manager.py`
+- `trade_lifecycle.py`, `health_check.py`
+- All strategy files in `strategies/`
+- All test files in `tests/`
+- `templates/_orders.html`
 
 ---
 
@@ -725,6 +433,53 @@ Both exchanges use the same `DDMMMYY` format. Deribit expiries settle at **08:00
 ---
 
 ## 8. Execution Model Changes
+
+### 8.0 Pricing Model: BTC-Native vs USD
+
+Deribit option prices are denominated in **BTC**, not USD. This is the single most important difference from Coincall and affects every layer of the system.
+
+#### How Prices Flow Through the System
+
+```
+Deribit API
+  ├── Orderbook:  bids/asks in BTC  (e.g., 0.0033 BTC)
+  ├── Ticker:     mark_price in BTC  (e.g., 0.0035 BTC)
+  ├── Greeks:     delta, gamma, etc. (per-contract, BTC-denominated)
+  └── Index:      btc_usd = $74,405  (USD)
+
+  ↓ DeribitMarketDataAdapter
+
+get_option_orderbook()
+  ├── bids/asks:  BTC-native prices  →  passed directly to executor
+  └── mark:       USD (index × mark_price_btc)  →  for display/notional calcs
+
+get_option_details()
+  └── All fields converted to USD  →  for strategy decision-making
+
+get_index_price()
+  └── USD  →  $74,405
+```
+
+#### Key Design Decisions
+
+1. **Orderbook prices stay in BTC.** The executor expects BTC prices and sends them directly to Deribit. No conversion happens in the order placement path.
+
+2. **`mark` field in orderbook is USD.** This is `index_price × mark_price_btc` — used for display in health check, notional calculations, and PnL estimates.
+
+3. **`get_option_details()` returns USD.** Strategy-level decision making (strike selection, Greek analysis) works in USD terms.
+
+4. **Strategies may express prices directly in BTC.** Some strategies will want to work in BTC terms (e.g., "sell this call at 0.0050 BTC"). The pricing pipeline supports this — prices from the orderbook flow through to the executor without USD conversion.
+
+5. **No `round(x, 2)` anywhere in the price path.** BTC prices like 0.0035 would be truncated to 0.00 by rounding to 2 decimal places. The executor's `_snap_to_tick()` handles all price precision using Deribit's tick size rules.
+
+#### Deribit's Advanced Pricing Modes (Future)
+
+Deribit supports three order pricing modes:
+- **BTC price** (default): `price: 0.021` = 0.021 BTC
+- **USD price**: `advanced: "usd"`, `price: 1500` = $1,500 (Deribit converts dynamically)
+- **IV price**: `advanced: "implv"`, `price: 55.0` = 55% implied volatility
+
+USD and IV modes are powerful for GTC orders that should track a dollar value or volatility level as spot moves. Not yet implemented — planned for Phase 4 when vol-targeting strategies are added.
 
 ### 8.1 RFQ on Both Exchanges — Different Thresholds, Same Abstraction
 
@@ -1075,16 +830,68 @@ Before going live on Deribit, run the bot in **read-only mode**:
 
 This builds confidence that the Deribit implementation produces equivalent decisions. Run for at least 24–48 hours across different market conditions before enabling live trading.
 
+### 9.6 Actual Test Results (17 March 2026)
+
+#### Integration Tests (25 passing)
+
+All 5 Deribit integration test files pass against live testnet:
+
+| Test File | Tests | Status |
+|-----------|-------|--------|
+| `tests/deribit/test_deribit_auth.py` | Auth grant, refresh, old-token rejection | ✅ PASS |
+| `tests/deribit/test_deribit_market_data.py` | Instruments, ticker, orderbook, index, BTC prices | ✅ PASS |
+| `tests/deribit/test_deribit_account.py` | Account summary (BTC+USDC), positions, open orders | ✅ PASS |
+| `tests/deribit/test_deribit_orders.py` | Place, read, edit, cancel, fill round-trip | ✅ PASS |
+| `tests/deribit/test_deribit_symbols.py` | Parse/reconstruct 1134 testnet + 918 prod instruments | ✅ PASS |
+
+#### Unit Tests (97 passing)
+
+All existing unit tests pass after the exchange-agnostic refactor:
+
+| Test File | Tests | Status |
+|-----------|-------|--------|
+| `tests/test_strategy_framework.py` | Strategy runner, lifecycle integration | ✅ PASS |
+| `tests/test_order_manager.py` | Order tracking, state mapping | ✅ PASS |
+| `tests/test_dashboard.py` | Dashboard rendering | ✅ PASS |
+| `tests/test_phase2_structural.py` | Module import, DI wiring | ✅ PASS |
+| `tests/test_phase3_hardening.py` | Error handling, resilience | ✅ PASS |
+| `tests/test_strategy_layer.py` | Strategy config, entry/exit | ✅ PASS |
+| `tests/test_atm_straddle.py` | ATM straddle strategy | ✅ PASS |
+| `tests/test_execution_timing.py` | Execution timing logic | ✅ PASS |
+
+**Total: 122 tests passing (97 unit + 25 integration)**
+
+#### End-to-End Testnet Validation
+
+Full trade lifecycle validated on Deribit testnet (17 March 2026):
+
+```
+Strategy:     smoke_test_strangle (0.1 BTC, ATM ±2 strikes, 60s hold)
+Instruments:  BTC-18MAR26-75000-C @ 0.0033, BTC-18MAR26-73500-P @ 0.0034
+Execution:    Limit orders → both FILLED
+Hold:         60s position monitoring (Positions=2, PnL tracked)
+Close:        max_hold_hours exit → sell orders placed → both FILLED
+Result:       Trade CLOSED, PnL ≈ $0.00
+
+5 iterative debug cycles to get from first run to success:
+  Run 1: Orderbook format mismatch (list-of-lists vs dict)
+  Run 2: USD vs BTC price confusion in orderbook
+  Run 3: Wrong BTC index price (old Coincall import)
+  Run 4: trade_lifecycle.py still importing Coincall market_data
+  Run 5: SUCCESS — orders placed and filled
+  Run 6: Full lifecycle (background run) — open → hold → close → CLOSED
+```
+
 ---
 
 ## 10. Migration Phases & Sequencing
 
-### Phase 0: Preparation (No Code Changes to Production)
-- [ ] Create Deribit account + API keys (testnet + production)
-- [ ] Study Deribit API documentation thoroughly
-- [ ] Set up Deribit testnet environment
-- [ ] Document all Deribit API endpoints we'll need
-- [ ] Identify any Deribit-specific constraints (rate limits, minimum order sizes, tick sizes)
+### Phase 0: Preparation ✅ COMPLETE (16 March 2026)
+- [x] Create Deribit account + API keys (testnet + production)
+- [x] Study Deribit API documentation thoroughly
+- [x] Set up Deribit testnet environment
+- [x] Document all Deribit API endpoints we'll need (see §13)
+- [x] Identify Deribit-specific constraints (rate limits, minimum order sizes, tick sizes)
 
 ### Phase 1: Exchange Abstraction Layer ✅ COMPLETE (v1.3.0-wip, 16 March 2026)
 **Goal:** Introduce interfaces without changing behavior. The system still runs on Coincall.
@@ -1127,27 +934,29 @@ exchanges/
     __init__.py
 ```
 
-### Phase 2: Deribit Implementation
-**Goal:** Implement all Deribit exchange adapters including Block RFQ. Test on testnet.
+### Phase 2: Deribit Implementation ✅ COMPLETE (v1.4.0-wip, 17 March 2026)
+**Goal:** Implement all Deribit exchange adapters. Test on testnet. Validate full trade lifecycle.
 
-- [ ] Implement `DeribitAuth` with OAuth2 token lifecycle
-- [ ] Implement `DeribitMarketData` (REST, poll-based — matching current architecture)
-- [ ] Implement `DeribitExecutor` (REST order placement)
-- [ ] Implement `DeribitAccountManager` (account + position queries)
-- [ ] Implement `DeribitRFQExecutor` (Block RFQ via REST JSON-RPC)
-  - [ ] `create_block_rfq` with leg translation and ratio handling
-  - [ ] `get_block_rfqs` polling for quote snapshots
-  - [ ] `accept_block_rfq` with ratio echo and price-based crossing
-  - [ ] `cancel_block_rfq`
-  - [ ] Handle multi-maker fill results (one RFQ → multiple block trades)
-- [ ] Implement Deribit symbol parser
-- [ ] Ensure API keys have `block_rfq:read` + `block_rfq_id:read_write` scopes
-- [ ] Write Deribit-specific unit tests (mock API responses, including Block RFQ lifecycle)
-- [ ] Write Deribit integration tests (hit testnet)
-- [ ] Update `ExecutionRouter` with Deribit RFQ minimum threshold (25 BTC)
-- [ ] Run in read-only mode on Deribit testnet (strategies evaluate but don't trade)
-- [ ] Validate option selection produces sensible results on Deribit instruments
-- [ ] Test Block RFQ on testnet (create, receive quotes, cross) — requires testnet MMs
+- [x] Implement `DeribitAuth` with OAuth2 token lifecycle (900s TTL, lazy refresh at 80%)
+- [x] Implement `DeribitMarketData` (REST, poll-based — BTC-native orderbook, USD conversion for display)
+- [x] Implement `DeribitExecutor` (REST order placement, `_snap_to_tick()`, separate buy/sell endpoints)
+- [x] Implement `DeribitAccountManager` (account + position queries, USD-denominated via `total_equity_usd`)
+- [ ] Implement `DeribitRFQExecutor` (Block RFQ via REST JSON-RPC) — *deferred: 25 BTC minimum too large for current strategy sizes*
+- [x] Implement Deribit symbol parser (round-trip verified against 1134+918 instruments)
+- [x] Write 25 Deribit integration tests (all passing against live testnet)
+- [x] Exchange-agnostic refactor: DI applied to 6 core modules (option_selection, execution_router, trade_execution, lifecycle_engine, strategy, account_manager)
+- [x] Fix orderbook format normalization (BTC-native dict format)
+- [x] Fix health_check.py (injected market_data for correct BTC index price)
+- [x] Fix trade_lifecycle.py (injected `_market_data` for `executable_pnl()`)
+- [x] Fix trade_execution.py (removed `round(x, 2)` that truncated BTC prices)
+- [x] Fix smoke test minimum quantity (0.01 → 0.1 BTC, Deribit minimum)
+- [x] **Full lifecycle validated on testnet** — option selection → buy filled → hold → sell filled → CLOSED
+- [ ] Parameterize RFQ minimum thresholds in `ExecutionRouter` (from exchange config) — *deferred to Phase 3*
+- [ ] Deploy to production on Coincall — verify no regressions (Coincall path untested since refactor)
+
+**Known issues:**
+- `rfq.py` still imports Coincall modules directly (not yet behind abstraction). Only affects RFQ execution on Coincall — no impact on Deribit limit-order execution.
+- Orphaned positions from killed bot runs are not recovered on restart (crash recovery gap). The bot's own trades close correctly; only positions from prior interrupted runs persist.
 
 ### Phase 3: Production Cutover
 **Goal:** Go live on Deribit.
@@ -1178,42 +987,57 @@ exchanges/
 
 ## 11. Risk Register
 
-| Risk | Severity | Mitigation |
-|------|----------|------------|
-| **Deribit API downtime during migration** | Medium | Testnet first; keep Coincall path functional throughout |
-| **Subtle data format differences cause wrong trades** | High | Extensive unit tests with real API response fixtures; read-only validation period |
-| **Token refresh failure causes auth cascade** | Medium | Implement proactive refresh (refresh at 80% TTL); fallback to re-auth from scratch |
-| **Rate limiting on Deribit** | Medium | Respect documented limits; add backoff; consider WebSocket early |
-| **Different margin calculation leads to unexpected liquidations** | High | Compare margin requirements side-by-side before going live; start with conservative sizing |
-| **Greeks calculation differences between exchanges** | Low | Both use Black-Scholes; verify delta/gamma/theta match within tolerance |
-| **Orderbook execution quality worse than expected** | Low | Deribit is more liquid; but validate with small trades first |
-| **Deribit Block RFQ minimum too large for current strategies** | Medium | 25 BTC minimum (~$2.1M) exceeds typical trade sizes; router falls back to limit orders; plan to scale into RFQ as AUM grows |
-| **Block RFQ taker rating degradation** | Low | Only create RFQs we intend to trade on; monitor OTV ratio; avoid price fishing |
-| **Multi-maker fill produces multiple block trades** | Medium | Ensure trade tracking handles one RFQ → N block trades; reconcile via `block_rfq_id` |
-| **Deribit testnet lacks Block RFQ MMs** | Medium | May need to test with disclosed identity targeting specific test accounts; or test on production with minimum size |
-| **Regression in Coincall path during abstraction** | Medium | Phase 1 is a pure refactor — all existing tests must pass before proceeding |
+| Risk | Severity | Mitigation | Outcome |
+|------|----------|------------|---------|
+| **Deribit API downtime during migration** | Medium | Testnet first; keep Coincall path functional throughout | ✅ No issues; testnet fully available |
+| **Subtle data format differences cause wrong trades** | High | Extensive unit tests with real API response fixtures; read-only validation period | ⚠️ HIT: orderbook format (list-of-lists vs dict), BTC vs USD pricing, round(x,2) truncation. All caught during 5 debug cycles on testnet. |
+| **Token refresh failure causes auth cascade** | Medium | Implement proactive refresh (refresh at 80% TTL); fallback to re-auth from scratch | ✅ Implemented; lazy refresh at 80% TTL works correctly |
+| **Rate limiting on Deribit** | Medium | Respect documented limits; add backoff; consider WebSocket early | ✅ Not triggered; 10s polling is very conservative |
+| **Different margin calculation leads to unexpected liquidations** | High | Compare margin requirements side-by-side before going live; start with conservative sizing | ⏳ Not yet tested at production size |
+| **Greeks calculation differences between exchanges** | Low | Both use Black-Scholes; verify delta/gamma/theta match within tolerance | ✅ Greeks always populated, values reasonable |
+| **Orderbook execution quality worse than expected** | Low | Deribit is more liquid; but validate with small trades first | ✅ Immediate fills at best_ask observed on testnet |
+| **Deribit Block RFQ minimum too large for current strategies** | Medium | 25 BTC minimum (~$2.1M) exceeds typical trade sizes; router falls back to limit orders | ✅ Confirmed: deferred RFQ to Phase 3+; limit orders work well |
+| **Regression in Coincall path during abstraction** | Medium | Phase 1 is a pure refactor — all existing tests must pass before proceeding | ⚠️ 97 unit tests pass, but Coincall path not live-tested since refactor |
+| **Hidden Coincall imports in "generic" modules** | — | *(Not originally identified)* | ⚠️ HIT: health_check, trade_lifecycle, lifecycle_engine all had hidden Coincall imports. Required Phase 2b exchange-agnostic refactor. |
+| **BTC price precision** | — | *(Not originally identified)* | ⚠️ HIT: `round(x, 2)` truncated BTC prices like 0.0035 → 0.00. Fix: removed all rounding; executor's `_snap_to_tick()` handles precision. |
 
 ---
 
 ## 12. Open Questions & Decisions Required
 
-1. **Dual-exchange support?** Do we want to run on both exchanges simultaneously (e.g., different strategies on different exchanges)? This is architecturally supported by the abstraction layer but adds operational complexity. Recommend: **no** — clean cutover is simpler.
+### Answered (Phase 2)
 
-2. **WebSocket timeline?** Should Phase 2 start with WebSocket (more work, better latency) or REST (faster to implement, matches current architecture)? Recommend: **REST first** — get functional parity, then optimize.
+1. **Dual-exchange support?** → **No**, clean cutover is simpler. Abstraction supports it if needed later.
 
-3. **Combo instruments?** Should multi-leg strategies use Deribit combo instruments from day one? Recommend: **no** — use individual limit orders first (proven approach), add combo support in Phase 4.
+2. **WebSocket timeline?** → **REST first.** Functional parity achieved with REST. WebSocket is Phase 4.
 
-4. **Settlement currency?** Deribit offers BTC-margined and USDC-margined options. Which do we use? BTC-margined is more liquid but introduces BTC exposure on collateral. USDC-margined is simpler from a P&L perspective. Recommend: **decide based on current trading approach**.
+3. **Combo instruments?** → **No**, individual limit orders work well. Combo support planned for Phase 4.
 
-5. **Minimum order size?** Deribit minimum is 0.1 BTC option contracts (vs Coincall's minimum which may differ). Verify strategy position sizes meet Deribit minimums.
+4. **Settlement currency?** → **BTC-margined** for now (more liquid). USDC-margined available if needed. Account adapter normalizes to USD via `total_equity_usd` fields.
 
-6. **Archive Coincall code?** After successful migration, do we archive the Coincall adapter or keep it maintained? Recommend: **keep in `exchanges/coincall/` but stop maintaining** — it's useful as a reference and costs nothing to keep.
+5. **Minimum order size?** → **0.1 BTC** contracts on Deribit (confirmed). Strategy smoke test updated from 0.01 to 0.1.
 
-7. **Block RFQ minimum size vs current strategies?** Deribit requires 25 BTC contracts minimum for Block RFQ. At ~$84k/BTC, this is ~$2.1M notional. Our current strategies typically trade $10k–$200k. Do we (a) scale up position sizes on Deribit to use Block RFQ, (b) accept that Block RFQ is not available at current sizes and use limit orders, or (c) plan a gradual ramp where Block RFQ unlocks at larger AUM? Recommend: **(b) for now, (c) as we grow** — the abstraction is ready when we need it.
+6. **Archive Coincall code?** → Keep in `exchanges/coincall/` but stop maintaining. Useful as reference.
 
-8. **Block RFQ anonymous vs disclosed?** Anonymous RFQs require targeting ≥5 MMs. Disclosed RFQs can target 1 MM but reveal our identity. For maximizing competition, anonymous is better. But if we have a preferred MM relationship, disclosed enables targeted quoting. Recommend: **anonymous by default** — maximum competition, and we have no established MM relationships on Deribit yet.
+7. **Block RFQ minimum?** → **(b) Accept limit orders for current sizes.** 25 BTC minimum far exceeds our typical $10k–$200k. RFQ abstraction is ready when we scale up.
 
-9. **Phased RFQ execution on Deribit — poll or trigger?** Our current `rfq_phased` logic polls quotes and manually decides when to accept. Deribit's `good_til_cancelled` trigger orders automate this — place a crossing order at desired price, update it over time. Should we use triggers from Phase 2 or stick with polling for parity? Recommend: **polling in Phase 2** (simpler, matches Coincall behavior), **trigger orders in Phase 4** (better execution, less API traffic).
+8. **Block RFQ anonymous vs disclosed?** → Deferred. Not using Block RFQ at current sizes.
+
+9. **Phased RFQ polling vs trigger?** → Deferred. Not using Block RFQ at current sizes.
+
+### Open (Post Phase 2)
+
+1. **Orphaned positions on restart.** When the bot is killed mid-trade (e.g., foreground run interrupted), the positions are not recovered on the next run. The bot only tracks its own `TradeLifecycle` objects. Need a position reconciliation step on startup: compare Deribit positions against saved snapshots and either resume tracking or flag for manual close.
+
+2. **`rfq.py` still has direct Coincall imports.** Not behind the exchange abstraction. Only matters if we want RFQ on Coincall after the refactor, or if we implement Deribit Block RFQ.
+
+3. **Coincall regression test.** The Coincall path has not been live-tested since the exchange-agnostic refactor. 97 unit tests pass but no live order has been placed via the refactored code on Coincall. Should run a smoke test on Coincall before declaring the abstraction fully validated.
+
+4. **Production sizing validation.** Testnet validated with 0.1 BTC minimum size. Production strategies will use larger sizes. Need to verify margin and position tracking at production scale.
+
+5. **Crash recovery with new DI pattern.** `LifecycleEngine` now sets `_market_data` on trades during `create()` and `restore()`. Verify that snapshot reload → restore → position monitoring works end-to-end after a crash.
+
+6. **Multiple expiry support.** Current smoke test uses nearest expiry. Production strategies may need different expiry selection. Verify `option_selection.py` handles Deribit's 11+ expiry dates correctly.
 
 ---
 
@@ -1755,4 +1579,4 @@ Deribit supports three pricing modes when placing orders:
 
 ---
 
-*End of migration plan. This document should be reviewed, discussed, and refined before any implementation begins.*
+*Migration plan last updated 17 March 2026. Phase 2 complete — Deribit testnet validated. Next: production cutover (Phase 3).*

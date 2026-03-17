@@ -25,7 +25,6 @@ from typing import Any, Callable, Dict, List, Optional
 
 from account_manager import AccountSnapshot, PositionSnapshot
 from trade_execution import ExecutionParams, ExecutionPhase
-from market_data import get_option_orderbook
 logger = logging.getLogger(__name__)
 
 
@@ -160,6 +159,9 @@ class TradeLifecycle:
     realized_pnl: Optional[float] = None
     exit_cost: Optional[float] = None
 
+    # Non-serialized: injected by LifecycleEngine for exchange-agnostic orderbook access
+    _market_data: Any = field(default=None, repr=False, compare=False)
+
     # -- Helpers --------------------------------------------------------------
 
     @property
@@ -218,7 +220,11 @@ class TradeLifecycle:
             if leg.fill_price is None:
                 return None  # leg not yet filled — shouldn't be called
 
-            orderbook = get_option_orderbook(leg.symbol)
+            if self._market_data:
+                orderbook = self._market_data.get_option_orderbook(leg.symbol)
+            else:
+                from market_data import get_option_orderbook
+                orderbook = get_option_orderbook(leg.symbol)
             if not orderbook:
                 logger.debug(
                     f"[{self.id}] executable_pnl: no orderbook for {leg.symbol}"

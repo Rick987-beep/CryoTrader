@@ -10,6 +10,7 @@ class CoincallAuthAdapter(ExchangeAuth):
 
     def __init__(self):
         self._inner = CoincallAuth(API_KEY, API_SECRET, BASE_URL)
+        self.base_url = self._inner.base_url
 
     def get(self, endpoint, **kwargs):
         return self._inner.get(endpoint, **kwargs)

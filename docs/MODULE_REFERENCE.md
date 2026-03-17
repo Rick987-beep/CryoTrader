@@ -1,9 +1,10 @@
 # CoincallTrader — Module Reference
 
-**Last Updated:** March 13, 2026
+**Last Updated:** March 17, 2026
 
 Internal documentation for the CoincallTrader application modules.
 For Coincall exchange API endpoints, see [API_REFERENCE.md](API_REFERENCE.md).
+For the Deribit migration plan and API field reference, see [MIGRATION_PLAN_DERIBIT.md](MIGRATION_PLAN_DERIBIT.md).
 
 ---
 
@@ -981,3 +982,119 @@ Saves and recovers active trade state to/from JSON. Provides crash recovery and 
 |------|--------|---------|
 | `logs/trade_state.json` | JSON | Current active-trade snapshot (overwritten each save) |
 | `logs/trade_history.jsonl` | JSON Lines | Append-only log of completed trades |
+
+---
+
+## Exchange Abstraction Layer
+
+See [exchanges/base.py](../exchanges/base.py), [exchanges/__init__.py](../exchanges/__init__.py).
+
+### Overview
+
+An abstraction layer that decouples core trading logic from exchange-specific APIs. Five abstract base classes define the exchange contract; concrete adapters implement them per exchange. Core modules receive adapters via dependency injection.
+
+### Abstract Interfaces (`exchanges/base.py`)
+
+| Interface | Methods | Purpose |
+|-----------|---------|---------|
+| `ExchangeAuth` | `get()`, `post()`, `is_successful()` | Authenticated HTTP client |
+| `ExchangeMarketData` | `get_index_price()`, `get_option_instruments()`, `get_option_details()`, `get_option_orderbook()` | Read-only market queries |
+| `ExchangeExecutor` | `place_order()`, `cancel_order()`, `get_order_status()` | Order lifecycle |
+| `ExchangeAccountManager` | `get_account_info()`, `get_positions()`, `get_open_orders()` | Account + positions |
+| `ExchangeRFQExecutor` | `execute()`, `execute_phased()`, `get_orderbook_cost()` | RFQ/block trades |
+
+### Exchange Factory (`exchanges/__init__.py`)
+
+```python
+from exchanges import build_exchange
+
+components = build_exchange("deribit")
+# components = {auth, market_data, executor, account_manager, rfq_executor, state_map}
+```
+
+`build_exchange(name)` constructs all adapters for the named exchange. Selected via `EXCHANGE` env var (default: `"coincall"`).
+
+### Side Encoding
+
+All internal code uses `"buy"` / `"sell"` strings. The int encoding (`1`/`2`) only exists inside `CoincallExecutorAdapter` at the API boundary. Backward compatibility: `TradeLeg.__post_init__` and `OrderRecord.from_dict()` auto-convert legacy int sides from crash-recovery snapshots.
+
+---
+
+## Coincall Adapters (`exchanges/coincall/`)
+
+Five thin wrapper classes that delegate to existing Coincall modules (`auth.py`, `market_data.py`, `trade_execution.py`, `account_manager.py`, `rfq.py`). No behavior changes — pure interface compliance.
+
+| Adapter | Wraps | Key Detail |
+|---------|-------|------------|
+| `CoincallAuthAdapter` | `auth.py` | HMAC-SHA256 signing, `X-CC-APIKEY` / `sign` / `ts` headers |
+| `CoincallMarketDataAdapter` | `market_data.py` | 30s TTL caching, USD-denominated prices |
+| `CoincallExecutorAdapter` | `trade_execution.py` | Converts `"buy"→1, "sell"→2` at API boundary |
+| `CoincallAccountAdapter` | `account_manager.py` | USD-denominated account data |
+| `CoincallRFQAdapter` | `rfq.py` | Wraps existing RFQ lifecycle |
+
+---
+
+## Deribit Adapters (`exchanges/deribit/`)
+
+See [exchanges/deribit/](../exchanges/deribit/) for implementation.
+
+### `DeribitAuth` (`exchanges/deribit/auth.py`)
+
+OAuth2 client_credentials authentication for Deribit's JSON-RPC API.
+
+| Method | Purpose |
+|--------|---------|
+| `get(endpoint, params)` | GET request with Bearer token auth |
+| `post(endpoint, body)` | POST JSON-RPC request with Bearer token auth |
+| `is_successful(response_data)` | Check for `"result"` key (not `"error"`) |
+
+**Token lifecycle:** 900s TTL; lazy refresh at 80% (720s). Thread-safe via `_ensure_auth()` check before every request. Refresh invalidates old token immediately — swap is atomic.
+
+### `DeribitMarketDataAdapter` (`exchanges/deribit/market_data.py`)
+
+| Method | Returns | Notes |
+|--------|---------|-------|
+| `get_index_price(symbol)` | `float` (USD) | `/public/get_index_price?index_name=btc_usd` |
+| `get_option_instruments(underlying)` | `list[dict]` | All active BTC options; filters out futures/perpetuals |
+| `get_option_details(symbol)` | `dict` | Ticker with Greeks; all prices converted to USD |
+| `get_option_orderbook(symbol, depth)` | `dict` | **BTC-native** bid/ask prices; `mark` field in USD |
+
+**Pricing model:** Orderbook returns BTC prices for direct use by executor. The `mark` field is `index_price × mark_price_btc` (USD) for display and notional calculations. `get_option_details()` converts everything to USD for strategy decision-making.
+
+### `DeribitExecutorAdapter` (`exchanges/deribit/executor.py`)
+
+| Method | Purpose |
+|--------|---------|
+| `place_order(symbol, side, qty, price, ...)` | Routes to `/private/buy` or `/private/sell` based on side |
+| `cancel_order(order_id)` | `/private/cancel` |
+| `get_order_status(order_id)` | `/private/get_order_state` |
+
+**Tick size handling:** `_snap_to_tick(price)` rounds to nearest valid tick:
+- Price < 0.005 BTC → tick = 0.0001
+- Price ≥ 0.005 BTC → tick = 0.0005
+
+**Order ID mapping:** Deribit uses `label` (max 64 chars) as client order ID. `order_id` stays stable through edits (`replaced=true`).
+
+### `DeribitAccountAdapter` (`exchanges/deribit/account.py`)
+
+| Method | Returns | Notes |
+|--------|---------|-------|
+| `get_account_info()` | `dict` | USD-denominated via `total_equity_usd`, `total_initial_margin_usd`, etc. |
+| `get_positions()` | `list[dict]` | Unsigned `size` + `direction` → signed qty; Greeks are total (portfolio-level) |
+| `get_open_orders()` | `list[dict]` | Normalized field names matching internal format |
+
+---
+
+## Smoke Test Strategy (`strategies/smoke_test_strangle.py`)
+
+Quick validation strategy for exchange integration testing. Not intended for production trading.
+
+| Parameter | Value |
+|-----------|-------|
+| Quantity | 0.1 BTC (Deribit minimum) |
+| Structure | ATM ±2 strikes strangle |
+| Hold time | 60 seconds |
+| Check interval | 5 seconds |
+| Max concurrent | 1 |
+
+Enters immediately (no time/day filters, no margin check), holds for 60 seconds, then exits via `max_hold_hours`. Validates the full lifecycle: option selection → order placement → fill tracking → position monitoring → close.

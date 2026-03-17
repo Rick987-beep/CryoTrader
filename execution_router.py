@@ -17,7 +17,6 @@ from typing import List, Optional
 
 from trade_execution import TradeExecutor, LimitFillManager, ExecutionParams
 from rfq import RFQExecutor, OptionLeg, RFQResult
-from market_data import get_option_orderbook
 from order_manager import OrderManager, OrderPurpose
 
 logger = logging.getLogger(__name__)
@@ -42,11 +41,13 @@ class ExecutionRouter:
         executor: TradeExecutor,
         rfq_executor: RFQExecutor,
         order_manager: OrderManager,
+        market_data,
         rfq_notional_threshold: float = 50000.0,
     ):
         self._executor = executor
         self._rfq_executor = rfq_executor
         self._order_manager = order_manager
+        self._market_data = market_data
         self.rfq_notional_threshold = rfq_notional_threshold
 
     # ── Open ─────────────────────────────────────────────────────────────
@@ -122,7 +123,7 @@ class ExecutionRouter:
         total_notional = 0.0
         for leg in legs:
             try:
-                orderbook = get_option_orderbook(leg.symbol)
+                orderbook = self._market_data.get_option_orderbook(leg.symbol)
                 if not orderbook:
                     logger.warning(f"Could not fetch orderbook for {leg.symbol}, using 0 notional")
                     continue
@@ -209,7 +210,7 @@ class ExecutionRouter:
         trade.state = TradeState.OPENING
 
         params = trade.execution_params or trade.metadata.get("execution_params") or ExecutionParams()
-        mgr = LimitFillManager(self._executor, params, order_manager=self._order_manager)
+        mgr = LimitFillManager(self._executor, params, order_manager=self._order_manager, market_data=self._market_data)
 
         ok = mgr.place_all(
             trade.open_legs,
@@ -331,7 +332,7 @@ class ExecutionRouter:
                 )
 
         params = trade.execution_params or trade.metadata.get("execution_params") or ExecutionParams()
-        mgr = LimitFillManager(self._executor, params, order_manager=self._order_manager)
+        mgr = LimitFillManager(self._executor, params, order_manager=self._order_manager, market_data=self._market_data)
 
         # BUG-2026-03-05: reduce_only prevents close orders from building reverse positions
         ok = mgr.place_all(

@@ -9,10 +9,12 @@ from strategies.blueprint_strangle import blueprint_strangle
 from strategies.atm_straddle import atm_straddle
 from strategies.atm_straddle_index_move import atm_straddle_index_move
 from strategies.daily_put_sell import daily_put_sell
+from strategies.smoke_test_strangle import smoke_test_strangle
 
 __all__ = [
     "blueprint_strangle",
     "atm_straddle",
     "atm_straddle_index_move",
     "daily_put_sell",
+    "smoke_test_strangle",
 ]

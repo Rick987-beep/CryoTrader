@@ -25,16 +25,19 @@ logger = logging.getLogger(__name__)
 class HealthChecker:
     """Logs system health at regular intervals. Observability only — no side effects."""
 
-    def __init__(self, check_interval: int = 300, account_snapshot_fn: Optional[Callable] = None):
+    def __init__(self, check_interval: int = 300, account_snapshot_fn: Optional[Callable] = None,
+                 market_data=None):
         """
         Initialize health checker.
 
         Args:
             check_interval: Interval between health checks in seconds (default 5 min = 300s)
             account_snapshot_fn: Function to call for latest account snapshot
+            market_data: ExchangeMarketData adapter for BTC index price
         """
         self.check_interval = check_interval
         self.account_snapshot_fn = account_snapshot_fn
+        self._market_data = market_data
         self._running = False
         self._thread = None
         self._start_time = time.time()
@@ -125,8 +128,11 @@ class HealthChecker:
 
         # Check BTC index price freshness
         try:
-            from market_data import get_btc_index_price
-            idx_price = get_btc_index_price(use_cache=False)
+            if self._market_data:
+                idx_price = self._market_data.get_index_price()
+            else:
+                from market_data import get_btc_index_price
+                idx_price = get_btc_index_price(use_cache=False)
             if idx_price is not None:
                 status_lines.append(f"BTC Index Price: ${idx_price:,.2f}")
             else:

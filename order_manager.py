@@ -492,7 +492,13 @@ class OrderManager:
             # Map exchange state to our status
             state_code = info.get("state")
             if state_code is not None:
-                new_status = self._state_map.get(int(state_code))
+                # Support both int keys (Coincall) and string keys (Deribit)
+                new_status = self._state_map.get(state_code)
+                if new_status is None:
+                    try:
+                        new_status = self._state_map.get(int(state_code))
+                    except (ValueError, TypeError):
+                        pass
                 if new_status and new_status != record.status:
                     old_status = record.status
                     record.status = new_status

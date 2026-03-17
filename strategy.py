@@ -106,12 +106,13 @@ def build_context(
     rfq_executor = components['rfq_executor']
     account_mgr = components['account_manager']
     state_map = components['state_map']
-    monitor = PositionMonitor(poll_interval=poll_interval)
+    monitor = PositionMonitor(account_manager=account_mgr, poll_interval=poll_interval)
     lifecycle_mgr = LifecycleEngine(
         rfq_notional_threshold=rfq_notional_threshold,
         account_manager=account_mgr,
         executor=executor,
         rfq_executor=rfq_executor,
+        market_data=market_data_svc,
         exchange_state_map=state_map,
     )
 
@@ -701,7 +702,7 @@ class StrategyRunner:
     def _open_trade(self) -> None:
         """Resolve leg specs to concrete symbols and open a trade."""
         try:
-            legs = resolve_legs(self.config.legs)
+            legs = resolve_legs(self.config.legs, self.ctx.market_data)
             logger.info(
                 f"[{self._strategy_id}] resolved {len(legs)} legs: "
                 f"{[l.symbol for l in legs]}"

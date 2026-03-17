@@ -25,9 +25,8 @@ import os
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-from account_manager import AccountManager, AccountSnapshot, PositionSnapshot
-from trade_execution import TradeExecutor, LimitFillManager, ExecutionParams
-from rfq import RFQExecutor
+from account_manager import AccountSnapshot, PositionSnapshot
+from trade_execution import LimitFillManager, ExecutionParams
 from order_manager import OrderManager, OrderPurpose, OrderStatus
 from execution_router import ExecutionRouter
 from trade_lifecycle import (
@@ -70,14 +69,16 @@ class LifecycleEngine:
     def __init__(
         self,
         rfq_notional_threshold: float = 50000.0,
-        account_manager: Optional[AccountManager] = None,
+        account_manager=None,
         executor=None,
         rfq_executor=None,
+        market_data=None,
         exchange_state_map: dict = None,
     ):
         self._trades: Dict[str, TradeLifecycle] = {}
-        self._executor = executor or TradeExecutor()
-        self._rfq_executor = rfq_executor or RFQExecutor()
+        self._executor = executor
+        self._rfq_executor = rfq_executor
+        self._market_data = market_data
         self._order_manager = OrderManager(self._executor, exchange_state_map=exchange_state_map)
         self._account_manager = account_manager
         self._tick_counter: int = 0
@@ -89,6 +90,7 @@ class LifecycleEngine:
             executor=self._executor,
             rfq_executor=self._rfq_executor,
             order_manager=self._order_manager,
+            market_data=self._market_data,
             rfq_notional_threshold=rfq_notional_threshold,
         )
 
@@ -124,6 +126,7 @@ class LifecycleEngine:
 
     def restore_trade(self, trade: TradeLifecycle) -> None:
         """Inject a recovered trade into the engine's trade registry."""
+        trade._market_data = self._market_data
         self._trades[trade.id] = trade
         logger.info(
             f"Restored trade {trade.id} (strategy={trade.strategy_id}, "
@@ -154,6 +157,7 @@ class LifecycleEngine:
             rfq_params=rfq_params,
             metadata=metadata or {},
         )
+        trade._market_data = self._market_data
         self._trades[trade.id] = trade
         logger.info(
             f"Trade {trade.id} created: {len(legs)} legs, "

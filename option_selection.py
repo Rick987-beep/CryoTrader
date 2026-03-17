@@ -27,8 +27,6 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
-from market_data import get_option_instruments, get_option_details, get_btc_futures_price
-
 logger = logging.getLogger(__name__)
 
 
@@ -61,7 +59,7 @@ class LegSpec:
     underlying: str = "BTC"
 
 
-def resolve_legs(specs: List[LegSpec]) -> list:
+def resolve_legs(specs: List[LegSpec], market_data) -> list:
     """
     Resolve a list of LegSpec templates into concrete TradeLeg objects.
 
@@ -71,6 +69,7 @@ def resolve_legs(specs: List[LegSpec]) -> list:
 
     Args:
         specs: List of LegSpec templates
+        market_data: ExchangeMarketData adapter for the active exchange
 
     Returns:
         List of TradeLeg objects with resolved symbols
@@ -87,6 +86,7 @@ def resolve_legs(specs: List[LegSpec]) -> list:
             strike_criteria=spec.strike_criteria,
             option_type=spec.option_type,
             underlying=spec.underlying,
+            market_data=market_data,
         )
         if symbol is None:
             raise ValueError(
@@ -103,7 +103,7 @@ def resolve_legs(specs: List[LegSpec]) -> list:
 # Option Selection
 # =============================================================================
 
-def select_option(expiry_criteria, strike_criteria, option_type='C', underlying='BTC'):
+def select_option(expiry_criteria, strike_criteria, option_type='C', underlying='BTC', market_data=None):
     """
     Select an option based on expiry and strike criteria.
 
@@ -112,13 +112,14 @@ def select_option(expiry_criteria, strike_criteria, option_type='C', underlying=
         strike_criteria (dict): Strike criteria - {'type': 'delta', 'value': 0.25} or other types
         option_type (str): 'C' for call, 'P' for put
         underlying (str): Underlying symbol, default 'BTC'
+        market_data: ExchangeMarketData adapter for the active exchange
 
     Returns:
         str: Option symbol or None if not found
     """
     try:
         # Get available options
-        options_list = get_option_instruments(underlying)
+        options_list = market_data.get_option_instruments(underlying)
         if not options_list:
             return None
 
@@ -130,11 +131,11 @@ def select_option(expiry_criteria, strike_criteria, option_type='C', underlying=
         # For delta selection, fetch delta for each option
         if strike_criteria.get('type') == 'delta':
             expiry_options = _add_delta_to_options(
-                expiry_options, target_delta=strike_criteria.get('value')
+                expiry_options, market_data, target_delta=strike_criteria.get('value')
             )
 
         # Select strike based on criteria
-        selected_option = _select_by_strike_criteria(expiry_options, strike_criteria)
+        selected_option = _select_by_strike_criteria(expiry_options, strike_criteria, market_data)
 
         if selected_option:
             delta_info = f", delta: {selected_option.get('delta', 'N/A')}"
@@ -251,7 +252,7 @@ def _filter_by_expiry(options_list, expiry_criteria, option_type):
     return expiry_options
 
 
-def _add_delta_to_options(options_list, target_delta: float = None):
+def _add_delta_to_options(options_list, market_data, target_delta: float = None):
     """
     Add delta values to option instruments by fetching details.
 
@@ -262,6 +263,7 @@ def _add_delta_to_options(options_list, target_delta: float = None):
 
     Args:
         options_list (list): List of option instruments
+        market_data: ExchangeMarketData adapter
         target_delta (float|None): Target delta for pre-sorting heuristic
 
     Returns:
@@ -289,7 +291,7 @@ def _add_delta_to_options(options_list, target_delta: float = None):
     options_with_delta = []
     for opt in sorted_options[:MAX_API_CALLS]:
         try:
-            details = get_option_details(opt['symbolName'])
+            details = market_data.get_option_details(opt['symbolName'])
             if details and 'delta' in details:
                 delta = float(details['delta'])
                 opt['delta'] = delta
@@ -302,13 +304,14 @@ def _add_delta_to_options(options_list, target_delta: float = None):
     return options_with_delta
 
 
-def _select_by_strike_criteria(options_list, strike_criteria):
+def _select_by_strike_criteria(options_list, strike_criteria, market_data):
     """
     Select option based on strike criteria.
 
     Args:
         options_list (list): List of option instruments
         strike_criteria (dict): Strike selection criteria
+        market_data: ExchangeMarketData adapter
 
     Returns:
         dict: Selected option instrument or None
@@ -319,7 +322,7 @@ def _select_by_strike_criteria(options_list, strike_criteria):
         target_strike = strike_criteria['value']
         if target_strike == 0:
             # 0 means "ATM" — use current spot price
-            target_strike = get_btc_futures_price()
+            target_strike = market_data.get_index_price()
             logger.info(f"closestStrike: value=0 → using spot price ${target_strike:.0f} as ATM")
         return min(options_list, key=lambda x: abs(x['strike'] - target_strike))
 
@@ -328,7 +331,7 @@ def _select_by_strike_criteria(options_list, strike_criteria):
         return min(options_list, key=lambda x: abs(x.get('delta', 0) - target_delta))
 
     elif criteria_type == 'spotdistance %':
-        spot_price = get_btc_futures_price()
+        spot_price = market_data.get_index_price()
         pct = strike_criteria['value'] / 100
         target_price = spot_price * (1 + pct)
         return min(options_list, key=lambda x: abs(x['strike'] - target_price))
@@ -369,6 +372,7 @@ def find_option(
     strike: Optional[Dict] = None,
     delta: Optional[Dict] = None,
     rank_by: str = "delta_mid",
+    market_data = None,
 ) -> Optional[Dict]:
     """
     Find the best option matching multiple simultaneous constraints.
@@ -416,13 +420,13 @@ def find_option(
         delta = delta or {}
 
         # -- Fetch index price --
-        index_price = get_btc_futures_price(use_cache=True)
+        index_price = market_data.get_index_price(underlying)
         if not index_price or index_price <= 0:
             logger.error("find_option: could not get index price")
             return None
 
         # -- Fetch instruments --
-        instruments = get_option_instruments(underlying)
+        instruments = market_data.get_option_instruments(underlying)
         if not instruments:
             logger.error("find_option: no instruments returned")
             return None
@@ -455,7 +459,7 @@ def find_option(
                           or rank_by in ("delta_mid", "delta_target"))
 
         if needs_delta:
-            options = _find_enrich_deltas(options, index_price, max_calls=10)
+            options = _find_enrich_deltas(options, market_data, index_price, max_calls=10)
             if not options:
                 logger.error("find_option: no options with delta data")
                 return None
@@ -617,7 +621,7 @@ def _otm_pct(strike: float, index_price: float, option_type: str) -> float:
         return (strike - index_price) / index_price * 100
 
 
-def _find_enrich_deltas(options: list, index_price: float, max_calls: int = 10) -> list:
+def _find_enrich_deltas(options: list, market_data, index_price: float, max_calls: int = 10) -> list:
     """
     Fetch deltas from the exchange for up to *max_calls* options.
 
@@ -637,7 +641,7 @@ def _find_enrich_deltas(options: list, index_price: float, max_calls: int = 10) 
     enriched = []
     for opt in to_fetch:
         try:
-            details = get_option_details(opt["symbolName"])
+            details = market_data.get_option_details(opt["symbolName"])
             if details and "delta" in details:
                 opt["delta"] = float(details["delta"])
                 enriched.append(opt)

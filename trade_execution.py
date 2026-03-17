@@ -18,7 +18,6 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 from config import BASE_URL, API_KEY, API_SECRET
 from auth import CoincallAuth
-from market_data import get_option_orderbook
 
 logger = logging.getLogger(__name__)
 
@@ -268,10 +267,11 @@ class LimitFillManager:
     """
 
     def __init__(self, executor: "TradeExecutor", params: Optional[ExecutionParams] = None,
-                 order_manager: Optional[Any] = None):
+                 order_manager: Optional[Any] = None, market_data=None):
         self._executor = executor
         self._params = params or ExecutionParams()
-        self._order_manager = order_manager  # Optional OrderManager for ledger tracking
+        self._order_manager = order_manager
+        self._market_data = market_data
         self._legs: List[_LegFillState] = []
         self._round_started_at: float = time.time()
 
@@ -657,7 +657,7 @@ class LimitFillManager:
     def _get_phased_price(self, symbol: str, side: str, phase: ExecutionPhase) -> Optional[float]:
         """Compute price according to the phase's pricing strategy."""
         try:
-            ob = get_option_orderbook(symbol)
+            ob = self._market_data.get_option_orderbook(symbol)
             if not ob:
                 return None
 
@@ -667,28 +667,27 @@ class LimitFillManager:
             if phase.pricing == "aggressive":
                 buffer = 1 + (phase.buffer_pct / 100.0)
                 if side == "buy" and best_ask is not None:
-                    return round(best_ask * buffer, 2)
+                    return best_ask * buffer
                 elif side == "sell" and best_bid is not None:
-                    return round(best_bid / buffer, 2)
+                    return best_bid / buffer
 
             elif phase.pricing == "mid":
                 if best_bid is not None and best_ask is not None:
-                    mid = (best_bid + best_ask) / 2
-                    return round(mid, 2)
+                    return (best_bid + best_ask) / 2
 
             elif phase.pricing == "top_of_book":
                 if side == "buy" and best_ask is not None:
-                    return round(best_ask, 2)
+                    return best_ask
                 elif side == "sell" and best_bid is not None:
-                    return round(best_bid, 2)
+                    return best_bid
 
             elif phase.pricing == "mark":
                 mark = float(ob.get('mark', 0))
                 if mark > 0:
-                    return round(mark, 2)
+                    return mark
                 # Fall back to mid if mark unavailable
                 if best_bid is not None and best_ask is not None:
-                    return round((best_bid + best_ask) / 2, 2)
+                    return (best_bid + best_ask) / 2
 
             return None
         except Exception as e:
@@ -698,7 +697,7 @@ class LimitFillManager:
     def _get_aggressive_price(self, symbol: str, side: str) -> Optional[float]:
         """Fetch best bid/ask and apply aggressive buffer (legacy mode)."""
         try:
-            ob = get_option_orderbook(symbol)
+            ob = self._market_data.get_option_orderbook(symbol)
             if not ob:
                 return None
 
@@ -706,10 +705,10 @@ class LimitFillManager:
 
             if side == "buy" and ob.get('asks'):
                 raw = float(ob['asks'][0]['price'])
-                return round(raw * buffer, 2)
+                return raw * buffer
             elif side == "sell" and ob.get('bids'):
                 raw = float(ob['bids'][0]['price'])
-                return round(raw / buffer, 2)
+                return raw / buffer
 
             return None
         except Exception as e:

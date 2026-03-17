@@ -115,10 +115,25 @@ om = OrderManager(mock)
 class FakeRFQExecutor:
     pass
 
+class FakeMarketData:
+    """Fake exchange market data adapter for tests."""
+    def get_option_orderbook(self, symbol):
+        return {
+            "bids": [{"price": "100.0", "qty": "10"}],
+            "asks": [{"price": "101.0", "qty": "10"}],
+        }
+    def get_option_instruments(self, underlying="BTC"):
+        return []
+    def get_option_details(self, symbol):
+        return None
+    def get_index_price(self, underlying="BTC"):
+        return 50000.0
+
 router = ExecutionRouter(
     executor=mock,
     rfq_executor=FakeRFQExecutor(),
     order_manager=om,
+    market_data=FakeMarketData(),
     rfq_notional_threshold=50000.0,
 )
 
@@ -160,28 +175,13 @@ for name in expected_properties:
 
 print("\n=== Test 5: ExecutionRouter limit open ===")
 
-# Patch get_option_orderbook so LimitFillManager gets a fake price
-import trade_execution as _te_mod
-
-_orig_get_ob = _te_mod.get_option_orderbook
-
-
-def _fake_orderbook(symbol):
-    """Return a synthetic orderbook with bid/ask for any symbol."""
-    return {
-        "bids": [{"price": "100.0", "qty": "10"}],
-        "asks": [{"price": "101.0", "qty": "10"}],
-    }
-
-
-_te_mod.get_option_orderbook = _fake_orderbook
-
 mock2 = MockExecutor()
 om2 = OrderManager(mock2)
 router2 = ExecutionRouter(
     executor=mock2,
     rfq_executor=FakeRFQExecutor(),
     order_manager=om2,
+    market_data=FakeMarketData(),
 )
 
 trade = TradeLifecycle(
@@ -199,9 +199,6 @@ check(
 )
 check("fill manager stored in metadata", "_open_fill_mgr" in trade.metadata)
 
-# Restore original
-_te_mod.get_option_orderbook = _orig_get_ob
-
 
 # =============================================================================
 # Test 6: ExecutionRouter limit close (with mock, patched orderbook)
@@ -209,7 +206,6 @@ _te_mod.get_option_orderbook = _orig_get_ob
 
 print("\n=== Test 6: ExecutionRouter limit close ===")
 
-_te_mod.get_option_orderbook = _fake_orderbook
 close_trade = TradeLifecycle(
     open_legs=[
         TradeLeg(symbol="BTCUSD-TEST-100000-C", qty=0.1, side="buy", filled_qty=0.1, fill_price=500.0),
@@ -225,6 +221,7 @@ router3 = ExecutionRouter(
     executor=mock3,
     rfq_executor=FakeRFQExecutor(),
     order_manager=om3,
+    market_data=FakeMarketData(),
 )
 
 result = router3.close(close_trade)
@@ -240,7 +237,6 @@ check(
     "close order placed with reduce_only",
     any(p.get("reduce_only") for p in mock3.placed),
 )
-_te_mod.get_option_orderbook = _orig_get_ob
 
 # =============================================================================
 # Test 7: ExecutionRouter close circuit breaker
@@ -264,6 +260,7 @@ router4 = ExecutionRouter(
     executor=mock4,
     rfq_executor=FakeRFQExecutor(),
     order_manager=om4,
+    market_data=FakeMarketData(),
 )
 
 result = router4.close(breaker_trade)

@@ -19,11 +19,28 @@ import time
 
 from strategy import build_context, StrategyRunner
 from trade_lifecycle import TradeLifecycle, TradeState
-from strategies import blueprint_strangle, atm_straddle, atm_straddle_index_move, daily_put_sell
+from strategies import blueprint_strangle, atm_straddle, atm_straddle_index_move, daily_put_sell, smoke_test_strangle
 from persistence import TradeStatePersistence
 from health_check import HealthChecker
 from dashboard import start_dashboard
-from config import ENVIRONMENT
+from config import ENVIRONMENT, DEPLOYMENT_TARGET
+
+_DEV_MODE = DEPLOYMENT_TARGET == "development"
+
+# =============================================================================
+# Dev-mode startup cleanup  (DEPLOYMENT_TARGET == 'development' only)
+# =============================================================================
+
+if _DEV_MODE:
+    _stale = [
+        "logs/trades_snapshot.json",
+        "logs/active_orders.json",
+        "logs/trading.log",
+    ]
+    for _f in _stale:
+        if os.path.exists(_f):
+            os.remove(_f)
+            print(f"[DEV] Removed stale {_f}")
 
 # =============================================================================
 # Logging
@@ -31,22 +48,21 @@ from config import ENVIRONMENT
 
 os.makedirs("logs", exist_ok=True)
 logging.basicConfig(
-    level=logging.WARNING,
+    level=logging.DEBUG if _DEV_MODE else logging.WARNING,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.FileHandler("logs/trading.log"),
         logging.StreamHandler(),
     ],
 )
-# Strategy-critical events (trade open/close, conditions triggered) log at
-# INFO or WARNING level.  Set the root to WARNING to suppress routine DEBUG
-# chatter; promote our own loggers to INFO so we still see trade events.
-for _name in ("__main__", "strategy", "trade_lifecycle", "trade_execution",
-              "rfq", "account_manager", "dashboard", "persistence",
-              "strategies.daily_put_sell", "strategies.atm_straddle",
-              "strategies.blueprint_strangle", "order_manager",
-              "ema_filter", "telegram_notifier"):
-    logging.getLogger(_name).setLevel(logging.INFO)
+if not _DEV_MODE:
+    # Production: promote only key modules to INFO, keep root at WARNING.
+    for _name in ("__main__", "strategy", "trade_lifecycle", "trade_execution",
+                  "rfq", "account_manager", "dashboard", "persistence",
+                  "strategies.daily_put_sell", "strategies.atm_straddle",
+                  "strategies.blueprint_strangle", "order_manager",
+                  "ema_filter", "telegram_notifier"):
+        logging.getLogger(_name).setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -58,7 +74,8 @@ STRATEGIES = [
     # atm_straddle,
     # atm_straddle_index_move,
     # blueprint_strangle,
-    daily_put_sell,
+    # daily_put_sell,
+    smoke_test_strangle,
 ]
 
 # =============================================================================
@@ -374,6 +391,7 @@ def main():
     health_checker = HealthChecker(
         check_interval=300,  # 5 minutes
         account_snapshot_fn=lambda: ctx.position_monitor.snapshot(),
+        market_data=ctx.market_data,
     )
 
     # ── Register strategies ──────────────────────────────────────────────
