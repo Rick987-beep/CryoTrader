@@ -153,7 +153,7 @@ class TestReconciliationLogic(unittest.TestCase):
 
     def test_clean_reconciliation(self):
         order = make_order("111", status=OrderStatus.LIVE)
-        exchange = [{"orderId": "111"}]
+        exchange = [{"order_id": "111"}]
         engine = self._make_engine_with_orders([order], exchange)
 
         engine._run_reconciliation()
@@ -163,7 +163,7 @@ class TestReconciliationLogic(unittest.TestCase):
 
     def test_orphan_detected_and_cancelled(self):
         # Exchange has order "999" but ledger doesn't
-        exchange = [{"orderId": "999"}]
+        exchange = [{"order_id": "999"}]
         engine = self._make_engine_with_orders([], exchange)
         engine._executor.cancel_order = MagicMock(return_value=True)
 

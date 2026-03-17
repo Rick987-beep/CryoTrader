@@ -582,7 +582,7 @@ class OrderManager:
         GRACE_PERIOD = 30.0  # seconds — skip recently-placed orders
         now = time.time()
         warnings = []
-        exchange_ids = {str(o.get("orderId", "")) for o in exchange_open_orders}
+        exchange_ids = {str(o.get("order_id", "")) for o in exchange_open_orders}
 
         # Check ledger orders against exchange
         for record in self._orders.values():

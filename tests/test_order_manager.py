@@ -638,14 +638,17 @@ r1 = om.place_order(
 
 # Exchange shows our order + an orphan
 exchange_orders = [
-    {"orderId": r1.order_id},
-    {"orderId": "999999"},  # orphan — not in our ledger
+    {"order_id": r1.order_id},
+    {"order_id": "999999"},  # orphan — not in our ledger
 ]
 warnings = om.reconcile(exchange_orders)
 check("orphan detected", any("999999" in w for w in warnings))
 check("our order not flagged", not any(r1.order_id in w and "not found" in w for w in warnings))
 
 # Now simulate exchange showing our order as gone
+# Promote order to LIVE first (reconcile skips PENDING orders)
+r1.status = OrderStatus.LIVE
+r1.placed_at = r1.placed_at - 60  # past grace period
 exchange_orders_empty = []
 warnings2 = om.reconcile(exchange_orders_empty)
 check("phantom ledger order detected", any(r1.order_id in w for w in warnings2))

@@ -317,6 +317,19 @@ class ExecutionRouter:
             logger.critical(f"Trade {trade.id}: {trade.error}")
             return False
 
+        # Cancel any existing close_leg orders (e.g. TP limit order) before
+        # placing SL close orders — prevents idempotent collision in OrderManager.
+        if self._order_manager:
+            existing = self._order_manager.get_live_orders(
+                trade.id, purpose=OrderPurpose.CLOSE_LEG
+            )
+            for rec in existing:
+                self._order_manager.cancel_order(rec.order_id)
+                logger.info(
+                    f"Trade {trade.id}: cancelled existing close order "
+                    f"{rec.order_id} ({rec.symbol} @ {rec.price}) before SL close"
+                )
+
         params = trade.execution_params or trade.metadata.get("execution_params") or ExecutionParams()
         mgr = LimitFillManager(self._executor, params, order_manager=self._order_manager)
 
