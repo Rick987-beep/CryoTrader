@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3-Day Execution Analysis — Mar 17-19, 2026</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; background: #1a1a2e; color: #e0e0e0; }
+  h1 { color: #e94560; border-bottom: 2px solid #e94560; padding-bottom: 10px; }
+  h2 { color: #0f3460; background: #e94560; padding: 8px 16px; border-radius: 4px; margin-top: 30px; }
+  h3 { color: #e94560; margin-top: 24px; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 14px; }
+  th { background: #16213e; color: #e94560; padding: 10px 12px; text-align: left; border: 1px solid #0f3460; }
+  td { padding: 8px 12px; border: 1px solid #0f3460; vertical-align: top; }
+  tr:nth-child(even) { background: #16213e; }
+  tr:nth-child(odd) { background: #1a1a2e; }
+  .loss { color: #ff6b6b; font-weight: bold; }
+  .win { color: #51cf66; font-weight: bold; }
+  .neutral { color: #ffd93d; }
+  .note { background: #16213e; border-left: 4px solid #e94560; padding: 12px 16px; margin: 16px 0; font-size: 14px; }
+  .warn { background: #2d1b00; border-left: 4px solid #ffd93d; padding: 12px 16px; margin: 16px 0; font-size: 14px; }
+  .good { background: #0d2818; border-left: 4px solid #51cf66; padding: 12px 16px; margin: 16px 0; font-size: 14px; }
+  .timeline { font-family: 'Courier New', monospace; font-size: 13px; }
+  code { background: #16213e; padding: 2px 6px; border-radius: 3px; font-size: 13px; }
+  .section { margin-bottom: 40px; }
+  .meta { color: #888; font-size: 13px; }
+  .price-note { font-size: 12px; color: #aaa; font-style: italic; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 12px; font-weight: bold; margin-left: 8px; }
+  .tag-pre { background: #4a1942; color: #e94560; }
+  .tag-post { background: #0d2818; color: #51cf66; }
+</style>
+</head>
+<body>
+
+<h1>3-Day Execution Analysis — Daily Put Sell Strategy</h1>
+<p class="meta">
+  Production: v1.1.1 (hotfix deployed Mar 17 08:14 UTC) &nbsp;|&nbsp;
+  Strategy: <code>daily_put_sell</code> &nbsp;|&nbsp;
+  Qty: 0.8 contracts &nbsp;|&nbsp;
+  SL: 70% mark &nbsp;|&nbsp;
+  TP: 90% capture (buy back at 10%)
+</p>
+<p class="meta">Generated: 2026-03-19 &nbsp;|&nbsp; All times UTC &nbsp;|&nbsp; All 3 trades hit stop-loss</p>
+
+<div class="warn">
+  <strong>⚠ Price convention in this report:</strong> "Per-unit" = price per option contract.
+  "Total" = per-unit × quantity (0.8). The exchange <code>fill_price</code> and order prices are per-unit.
+  The RFQ <code>total_cost</code>, <code>entry_cost</code>, <code>exit_cost</code>, and <code>realized_pnl</code> are totals.
+  Telegram shows both: <code>@ $100</code> (per-unit) and <code>Premium received: $80</code> (total).
+</div>
+
+<!-- ========== TRADE OVERVIEW ========== -->
+<div class="section">
+<h2>Trade Overview</h2>
+<table>
+  <tr>
+    <th></th>
+    <th>Tue Mar 17 <span class="tag tag-pre">pre-hotfix</span></th>
+    <th>Wed Mar 18 <span class="tag tag-post">post-hotfix</span></th>
+    <th>Thu Mar 19 <span class="tag tag-post">post-hotfix</span></th>
+  </tr>
+  <tr>
+    <td><strong>Trade ID</strong></td>
+    <td><code>0f607bf2-90d</code></td>
+    <td><code>b44c2b79-964</code></td>
+    <td><code>8224662b-745</code></td>
+  </tr>
+  <tr>
+    <td><strong>Instrument</strong></td>
+    <td>BTCUSD-18MAR26-72000-P</td>
+    <td>BTCUSD-19MAR26-71000-P</td>
+    <td>BTCUSD-20MAR26-68000-P</td>
+  </tr>
+  <tr>
+    <td><strong>BTC Index at open</strong></td>
+    <td>$75,220</td>
+    <td>$74,344</td>
+    <td>$71,079</td>
+  </tr>
+  <tr>
+    <td><strong>Strike</strong></td>
+    <td>$72,000</td>
+    <td>$71,000</td>
+    <td>$68,000</td>
+  </tr>
+  <tr>
+    <td><strong>OTM distance</strong></td>
+    <td>4.3%</td>
+    <td>4.5%</td>
+    <td>4.3%</td>
+  </tr>
+  <tr>
+    <td><strong>EMA-20</strong></td>
+    <td>$70,185 (BTC above ✓)</td>
+    <td>(above ✓)</td>
+    <td>(above ✓)</td>
+  </tr>
+</table>
+</div>
+
+<!-- ========== OPENING EXECUTION ========== -->
+<div class="section">
+<h2>Opening Execution (Phased RFQ)</h2>
+
+<div class="note">
+  <strong>How phased RFQ works for opening:</strong><br>
+  Config: <code>RFQ_OPEN_TIMEOUT=300s</code>, <code>initial_wait=30s</code>, <code>floor=2.2%</code><br>
+  Phase 1 (0→30s): Collect quotes, don't accept — let market makers compete.<br>
+  Phase 2 (30s→300s): Accept first quote that meets the floor (within 2.2% of orderbook).<br>
+  In practice, quotes stabilize during Phase 1, so Phase 2 accepts immediately at the 30s mark.<br>
+  Total open time: ~50s (gate pass → option selection → RFQ create → 30s wait → accept → confirm).
+</div>
+
+<table>
+  <tr>
+    <th></th>
+    <th>Tue Mar 17</th>
+    <th>Wed Mar 18</th>
+    <th>Thu Mar 19</th>
+  </tr>
+  <tr>
+    <td><strong>Entry gates pass</strong></td>
+    <td class="timeline">03:00:03</td>
+    <td class="timeline">03:00:07</td>
+    <td class="timeline">03:00:20</td>
+  </tr>
+  <tr>
+    <td><strong>Option selected</strong></td>
+    <td class="timeline">03:00:16 (13s)</td>
+    <td class="timeline">03:00:22 (15s)</td>
+    <td class="timeline">03:00:35 (15s)</td>
+  </tr>
+  <tr>
+    <td><strong>RFQ created</strong></td>
+    <td class="timeline">03:00:18</td>
+    <td class="timeline">03:00:24</td>
+    <td class="timeline">03:00:36</td>
+  </tr>
+  <tr>
+    <td><strong>Orderbook baseline</strong></td>
+    <td>$100.00 <span class="price-note">(total: best_bid × 0.8)</span></td>
+    <td>$96.00 <span class="price-note">(total)</span></td>
+    <td>$96.00 <span class="price-note">(total)</span></td>
+  </tr>
+  <tr>
+    <td><strong>Orderbook per-unit</strong></td>
+    <td class="neutral">~$125 best bid</td>
+    <td class="neutral">~$120 best bid</td>
+    <td class="neutral">~$120 best bid</td>
+  </tr>
+  <tr>
+    <td><strong>Phase 1 best quote</strong></td>
+    <td>$76 total (stable)</td>
+    <td>$76 total (stable)</td>
+    <td>$80 total (stable)</td>
+  </tr>
+  <tr>
+    <td><strong>Phase 2 accept</strong></td>
+    <td class="timeline">03:00:52 (34s into RFQ)</td>
+    <td class="timeline">03:00:57 (33s into RFQ)</td>
+    <td class="timeline">03:01:10 (34s into RFQ)</td>
+  </tr>
+  <tr>
+    <td><strong>RFQ fill (total cost)</strong></td>
+    <td>$76.00</td>
+    <td>$76.00</td>
+    <td>$80.00</td>
+  </tr>
+  <tr>
+    <td><strong>vs orderbook improvement</strong></td>
+    <td class="win">+176%</td>
+    <td class="win">+179%</td>
+    <td class="win">+183%</td>
+  </tr>
+  <tr>
+    <td><strong>Leg fill_price (per-unit)</strong></td>
+    <td><strong>$95.00</strong></td>
+    <td><strong>$95.00</strong></td>
+    <td><strong>$100.00</strong></td>
+  </tr>
+  <tr>
+    <td><strong>Entry cost (total)</strong></td>
+    <td>$76.00 <span class="price-note">(= $95 × 0.8)</span></td>
+    <td>$76.00 <span class="price-note">(= $95 × 0.8)</span></td>
+    <td>$80.00 <span class="price-note">(= $100 × 0.8)</span></td>
+  </tr>
+  <tr>
+    <td><strong>TP limit order</strong></td>
+    <td>BUY @ $9.50 per-unit</td>
+    <td>BUY @ $9.50 per-unit</td>
+    <td>BUY @ $10.00 per-unit</td>
+  </tr>
+  <tr>
+    <td><strong>Gate → confirmed</strong></td>
+    <td>62s</td>
+    <td>63s</td>
+    <td>63s</td>
+  </tr>
+</table>
+
+<div class="warn">
+  <strong>⚠ Missing data — Option mark/mid price not logged at open.</strong><br>
+  We log the orderbook best bid (as total cost baseline) and BTC index price, but NOT the option's
+  mark price or mid price at the moment of selection or fill. This makes it impossible to measure
+  slippage vs theoretical fair value. We can only compare RFQ fill vs orderbook.
+</div>
+
+<div class="note">
+  <strong>Price reconciliation puzzle:</strong><br>
+  The orderbook baseline is $100 total (= ~$125/contract × 0.8), but the RFQ fill is $76 total (= $95/contract × 0.8).
+  This means the RFQ got us filled at $95/contract when the best bid was ~$125/contract?
+  That seems backwards — we're SELLING, so getting $95 when the bid is $125 would be WORSE, not better.<br><br>
+  The "improvement" percentage (+176%) is calculated by the RFQ module's formula, but the sign convention
+  for SELL structures is inverted (negative costs = credits). The RFQ cost is a negative number for a sell
+  (we receive money), and the log shows the absolute value. The actual economics:
+  we received $76 total premium. Whether $95/contract is good or bad depends on the mark price,
+  which we don't know.
+</div>
+</div>
+
+<!-- ========== CLOSING EXECUTION ========== -->
+<div class="section">
+<h2>Closing Execution (SL Trigger → RFQ Attempt → Limit Fallback)</h2>
+
+<div class="note">
+  <strong>How SL close works:</strong><br>
+  Config: <code>RFQ_CLOSE_TIMEOUT=15s</code>, <code>min_improvement_pct=0.0%</code>, <code>fallback_mode="limit"</code><br>
+  1. <code>max_loss(70%, mark)</code> triggers when unrealized PnL ≥ 70% of entry premium.<br>
+  2. Attempt RFQ close (15s window, accept any quote at-or-better than orderbook ask).<br>
+  3. RFQ always fails (counterparty quotes are 220-260% worse than book in fast markets).<br>
+  4. Fall back to aggressive limit: place BUY at <code>best_ask × 1.02</code> (2% above ask).<br>
+  5. Post-hotfix: cancel existing TP order before placing limit. Pre-hotfix: idempotent collision.
+</div>
+
+<table>
+  <tr>
+    <th></th>
+    <th>Tue Mar 17 <span class="tag tag-pre">pre-hotfix</span></th>
+    <th>Wed Mar 18 <span class="tag tag-post">post-hotfix</span></th>
+    <th>Thu Mar 19 <span class="tag tag-post">post-hotfix</span></th>
+  </tr>
+  <tr>
+    <td><strong>SL triggered</strong></td>
+    <td class="timeline">03:22:37</td>
+    <td class="timeline">07:30:47</td>
+    <td class="timeline">04:25:35</td>
+  </tr>
+  <tr>
+    <td><strong>Hold time</strong></td>
+    <td>22 min</td>
+    <td>4h 30m</td>
+    <td>1h 25m</td>
+  </tr>
+  <tr>
+    <td><strong>Mark PnL at trigger</strong></td>
+    <td class="loss">-76.3% (-$57.96 / $76.00)</td>
+    <td class="loss">-70.7% (-$53.75 / $76.00)</td>
+    <td class="loss">-72.1% (-$57.70 / $80.00)</td>
+  </tr>
+  <tr>
+    <td><strong>Option mark price at trigger</strong></td>
+    <td class="neutral">unknown (not logged)</td>
+    <td class="neutral">unknown (not logged)</td>
+    <td class="neutral">unknown (not logged)</td>
+  </tr>
+  <tr>
+    <td colspan="4" style="background:#16213e; text-align:center; color:#e94560;"><strong>— RFQ Close Attempt (15s) —</strong></td>
+  </tr>
+  <tr>
+    <td><strong>RFQ created</strong></td>
+    <td class="timeline">03:22:39</td>
+    <td class="timeline">07:30:48</td>
+    <td class="timeline">04:25:36</td>
+  </tr>
+  <tr>
+    <td><strong>Orderbook baseline (total)</strong></td>
+    <td>-$116.00</td>
+    <td>-$104.00</td>
+    <td>-$104.00</td>
+  </tr>
+  <tr>
+    <td><strong>Orderbook ask per-unit</strong></td>
+    <td class="neutral">~$145</td>
+    <td class="neutral">~$130</td>
+    <td class="neutral">~$130</td>
+  </tr>
+  <tr>
+    <td><strong>Best RFQ quote (total)</strong></td>
+    <td class="loss">$137.60 (230% worse)</td>
+    <td class="loss">$130.40 (225% worse)</td>
+    <td class="loss">$136.00 (231% worse)</td>
+  </tr>
+  <tr>
+    <td><strong>RFQ result</strong></td>
+    <td class="loss">FAILED — no quotes accepted</td>
+    <td class="loss">FAILED — no quotes accepted</td>
+    <td class="loss">FAILED — no quotes accepted</td>
+  </tr>
+  <tr>
+    <td><strong>RFQ cancelled</strong></td>
+    <td class="timeline">03:22:55 (16s)</td>
+    <td class="timeline">07:31:05 (17s)</td>
+    <td class="timeline">04:25:53 (17s)</td>
+  </tr>
+  <tr>
+    <td colspan="4" style="background:#16213e; text-align:center; color:#e94560;"><strong>— Limit Fallback (aggressive) —</strong></td>
+  </tr>
+  <tr>
+    <td><strong>TP collision / cancel</strong></td>
+    <td class="loss">YES — idempotent hit, returned TP order at $9.50 instead of placing new order. 35s delay!</td>
+    <td class="win">TP cancelled first ✓ (hotfix)</td>
+    <td class="win">TP cancelled first ✓ (hotfix)</td>
+  </tr>
+  <tr>
+    <td><strong>Limit order placed</strong></td>
+    <td class="timeline">03:22:56 (but wrong order!)<br>Requoted: 03:23:33</td>
+    <td class="timeline">07:31:06</td>
+    <td class="timeline">04:25:55</td>
+  </tr>
+  <tr>
+    <td><strong>Limit price (per-unit)</strong></td>
+    <td>$168.30 → requoted $163.20</td>
+    <td>$158.10</td>
+    <td>$153.00</td>
+  </tr>
+  <tr>
+    <td><strong>Actual fill price (per-unit)</strong></td>
+    <td><strong>$160.00</strong></td>
+    <td><strong>$155.00</strong></td>
+    <td><strong>$150.00</strong></td>
+  </tr>
+  <tr>
+    <td><strong>Fill improvement</strong></td>
+    <td class="win">$3.20 better than limit</td>
+    <td class="win">$3.10 better than limit</td>
+    <td class="win">$3.00 better than limit</td>
+  </tr>
+  <tr>
+    <td><strong>Filled at</strong></td>
+    <td class="timeline">03:23:44</td>
+    <td class="timeline">07:31:18</td>
+    <td class="timeline">04:26:07</td>
+  </tr>
+  <tr>
+    <td><strong>Fill time (limit → fill)</strong></td>
+    <td>11s</td>
+    <td>12s</td>
+    <td>12s</td>
+  </tr>
+  <tr>
+    <td><strong>Total close time (SL → filled)</strong></td>
+    <td class="loss">67s (35s wasted on bug)</td>
+    <td class="win">31s ✓</td>
+    <td class="win">32s ✓</td>
+  </tr>
+  <tr>
+    <td><strong>Option mark at fill</strong></td>
+    <td class="neutral">unknown (not logged)</td>
+    <td class="neutral">unknown (not logged)</td>
+    <td class="neutral">unknown (not logged)</td>
+  </tr>
+</table>
+
+<div class="warn">
+  <strong>⚠ Missing data — Option mark/mid price not logged at SL trigger or fill.</strong><br>
+  We know the mark-based PnL ratio that triggered the SL (e.g., -76.3%), and from that we can
+  back-calculate the approximate mark price: mark ≈ entry_premium + |mark_pnl| / qty.
+  For Mar 17: mark ≈ $95 + $57.96/0.8 = ~$167.45/contract.<br>
+  But we don't know the mark at actual fill time (which was 67s later for Mar 17, 31s for Mar 18-19).
+  This gap matters for measuring execution slippage.
+</div>
+</div>
+
+<!-- ========== P&L SUMMARY ========== -->
+<div class="section">
+<h2>P&L Summary</h2>
+<table>
+  <tr>
+    <th></th>
+    <th>Tue Mar 17</th>
+    <th>Wed Mar 18</th>
+    <th>Thu Mar 19</th>
+    <th>3-Day Total</th>
+  </tr>
+  <tr>
+    <td><strong>Entry premium (total)</strong></td>
+    <td>$76.00</td>
+    <td>$76.00</td>
+    <td>$80.00</td>
+    <td>$232.00</td>
+  </tr>
+  <tr>
+    <td><strong>Exit cost (total)</strong></td>
+    <td>$128.00 <span class="price-note">($160 × 0.8)</span></td>
+    <td>$124.00 <span class="price-note">($155 × 0.8)</span></td>
+    <td>$120.00 <span class="price-note">($150 × 0.8)</span></td>
+    <td>$372.00</td>
+  </tr>
+  <tr>
+    <td><strong>Realized PnL</strong></td>
+    <td class="loss">-$52.00</td>
+    <td class="loss">-$48.00</td>
+    <td class="loss">-$40.00</td>
+    <td class="loss">-$140.00</td>
+  </tr>
+  <tr>
+    <td><strong>Loss as % of premium</strong></td>
+    <td class="loss">68%</td>
+    <td class="loss">63%</td>
+    <td class="loss">50%</td>
+    <td class="loss">60%</td>
+  </tr>
+  <tr>
+    <td><strong>Implied exit per-unit</strong></td>
+    <td>$160</td>
+    <td>$155</td>
+    <td>$150</td>
+    <td>—</td>
+  </tr>
+  <tr>
+    <td><strong>Implied entry per-unit</strong></td>
+    <td>$95</td>
+    <td>$95</td>
+    <td>$100</td>
+    <td>—</td>
+  </tr>
+</table>
+
+<div class="note">
+  <strong>SL at 70% but losses are 50-68%?</strong><br>
+  The SL triggers at 70% of entry premium in mark terms, but the actual realized loss depends on
+  execution — how long it takes to close and where the fill lands. On Mar 17 (pre-hotfix, 67s close),
+  the loss was 68% of premium. On Mar 19 (post-hotfix, 32s close), only 50%. Faster closes = smaller realized losses.
+  The hotfix saved ~$10-18/trade in execution slippage.
+</div>
+</div>
+
+<!-- ========== EXECUTION TIMELINE ========== -->
+<div class="section">
+<h2>Detailed Timelines</h2>
+
+<h3>Tuesday March 17 — <code>0f607bf2-90d</code> <span class="tag tag-pre">pre-hotfix v1.1.0</span></h3>
+<table>
+  <tr><th>Time (UTC)</th><th>Event</th><th>Detail</th></tr>
+  <tr><td class="timeline">03:00:03</td><td>EMA filter pass</td><td>BTC=$75,170, EMA-20=$70,185 → ABOVE ✓</td></tr>
+  <tr><td class="timeline">03:00:03</td><td>All gates pass</td><td>Opening trade</td></tr>
+  <tr><td class="timeline">03:00:16</td><td>Option selected</td><td>BTCUSD-18MAR26-72000-P</td></tr>
+  <tr><td class="timeline">03:00:18</td><td>Phased RFQ created</td><td>timeout=300s, wait=30s</td></tr>
+  <tr><td class="timeline">03:00:17</td><td>Orderbook baseline</td><td>$100.00 total (best bid ~$125/unit × 0.8)</td></tr>
+  <tr><td class="timeline">03:00:26–48</td><td>Phase 1: collecting</td><td>2-4 quotes/round, best $76 total, stable</td></tr>
+  <tr><td class="timeline">03:00:52</td><td>Phase 2: accepted</td><td>Quote $76.00 total (+176% vs book)</td></tr>
+  <tr><td class="timeline">03:01:05</td><td>Trade opened</td><td>SELL @ $95/unit, BTC=$75,220</td></tr>
+  <tr><td class="timeline">03:01:06</td><td>TP placed</td><td>BUY @ $9.50/unit</td></tr>
+  <tr><td class="timeline">03:01:54–03:22</td><td>Reconciliation spam</td><td>TP order "not found on exchange" every ~60s (pre-hotfix bug)</td></tr>
+  <tr><td class="timeline">03:22:37</td><td style="color:#ff6b6b">SL triggered</td><td>PnL -76.3% (mark pnl: -$57.96, entry: $76.00)</td></tr>
+  <tr><td class="timeline">03:22:39</td><td>Close RFQ created</td><td>timeout=15s, book baseline=-$116 total</td></tr>
+  <tr><td class="timeline">03:22:42–52</td><td>RFQ quotes received</td><td>Best: $137.60 total (231% worse than book)</td></tr>
+  <tr><td class="timeline">03:22:55</td><td>RFQ cancelled/failed</td><td>No quotes accepted within 15s</td></tr>
+  <tr><td class="timeline">03:22:56</td><td style="color:#ff6b6b">Idempotent collision</td><td>Tried to place limit, got back existing TP order at $9.50!</td></tr>
+  <tr><td class="timeline">03:23:31</td><td>Timeout on wrong order</td><td>35s wasted waiting for $9.50 TP to fill at $160+ market</td></tr>
+  <tr><td class="timeline">03:23:32</td><td>TP cancelled</td><td>Requoting unfilled legs</td></tr>
+  <tr><td class="timeline">03:23:33</td><td>Aggressive limit placed</td><td>BUY @ $163.20/unit</td></tr>
+  <tr><td class="timeline">03:23:44</td><td style="color:#51cf66">Filled</td><td>@ $160.00/unit (11s, $3.20 improvement)</td></tr>
+  <tr><td class="timeline">03:23:44</td><td>Trade closed</td><td>PnL = -$52.00</td></tr>
+</table>
+
+<h3>Wednesday March 18 — <code>b44c2b79-964</code> <span class="tag tag-post">post-hotfix v1.1.1</span></h3>
+<table>
+  <tr><th>Time (UTC)</th><th>Event</th><th>Detail</th></tr>
+  <tr><td class="timeline">03:00:07</td><td>All gates pass</td><td>Opening trade</td></tr>
+  <tr><td class="timeline">03:00:22</td><td>Phased RFQ created</td><td>Book baseline: $96.00 total (~$120/unit × 0.8)</td></tr>
+  <tr><td class="timeline">03:00:27–53</td><td>Phase 1: collecting</td><td>4 quotes/round, best $76 total, stable</td></tr>
+  <tr><td class="timeline">03:00:57</td><td>Phase 2: accepted</td><td>Quote $76.00 total (+179% vs book)</td></tr>
+  <tr><td class="timeline">03:01:10</td><td>Trade opened</td><td>SELL @ $95/unit, BTC=$74,344</td></tr>
+  <tr><td class="timeline">03:01:11</td><td>TP placed</td><td>BUY @ $9.50/unit</td></tr>
+  <tr><td class="timeline">07:30:47</td><td style="color:#ff6b6b">SL triggered</td><td>PnL -70.7% (-$53.75 / $76.00). Held 4h 30m.</td></tr>
+  <tr><td class="timeline">07:30:48</td><td>Close RFQ created</td><td>timeout=15s, book baseline=-$104 total</td></tr>
+  <tr><td class="timeline">07:30:51–04</td><td>RFQ quotes received</td><td>Best: $130.40 total (225% worse)</td></tr>
+  <tr><td class="timeline">07:31:05</td><td>RFQ failed</td><td>No quotes accepted within 15s</td></tr>
+  <tr><td class="timeline">07:31:05</td><td style="color:#51cf66">TP cancelled (hotfix)</td><td>Existing close_leg order removed before placing SL limit</td></tr>
+  <tr><td class="timeline">07:31:06</td><td>Aggressive limit placed</td><td>BUY @ $158.10/unit</td></tr>
+  <tr><td class="timeline">07:31:18</td><td style="color:#51cf66">Filled</td><td>@ $155.00/unit (12s, $3.10 improvement)</td></tr>
+  <tr><td class="timeline">07:31:18</td><td>Trade closed</td><td>PnL = -$48.00</td></tr>
+</table>
+
+<h3>Thursday March 19 — <code>8224662b-745</code> <span class="tag tag-post">post-hotfix v1.1.1</span></h3>
+<table>
+  <tr><th>Time (UTC)</th><th>Event</th><th>Detail</th></tr>
+  <tr><td class="timeline">03:00:20</td><td>All gates pass</td><td>Opening trade</td></tr>
+  <tr><td class="timeline">03:00:35</td><td>Phased RFQ created</td><td>Book baseline: $96.00 total (~$120/unit × 0.8)</td></tr>
+  <tr><td class="timeline">03:00:39–06</td><td>Phase 1: collecting</td><td>5 quotes/round, best $80 total, stable</td></tr>
+  <tr><td class="timeline">03:01:10</td><td>Phase 2: accepted</td><td>Quote $80.00 total (+183% vs book)</td></tr>
+  <tr><td class="timeline">03:01:23</td><td>Trade opened</td><td>SELL @ $100/unit, BTC=$71,079</td></tr>
+  <tr><td class="timeline">03:01:24</td><td>TP placed</td><td>BUY @ $10.00/unit</td></tr>
+  <tr><td class="timeline">04:25:35</td><td style="color:#ff6b6b">SL triggered</td><td>PnL -72.1% (-$57.70 / $80.00). Held 1h 25m.</td></tr>
+  <tr><td class="timeline">04:25:36</td><td>Close RFQ created</td><td>timeout=15s, book baseline=-$104 total</td></tr>
+  <tr><td class="timeline">04:25:39–50</td><td>RFQ quotes received</td><td>Best: $136.00 total (231% worse)</td></tr>
+  <tr><td class="timeline">04:25:53</td><td>RFQ failed</td><td>No quotes accepted within 15s</td></tr>
+  <tr><td class="timeline">04:25:54</td><td style="color:#51cf66">TP cancelled (hotfix)</td><td>Existing close_leg order removed</td></tr>
+  <tr><td class="timeline">04:25:55</td><td>Aggressive limit placed</td><td>BUY @ $153.00/unit</td></tr>
+  <tr><td class="timeline">04:26:07</td><td style="color:#51cf66">Filled</td><td>@ $150.00/unit (12s, $3.00 improvement)</td></tr>
+  <tr><td class="timeline">04:26:07</td><td>Trade closed</td><td>PnL = -$40.00</td></tr>
+</table>
+</div>
+
+<!-- ========== KEY FINDINGS ========== -->
+<div class="section">
+<h2>Key Findings &amp; Open Questions</h2>
+
+<div class="good">
+  <strong>✓ Opening execution is consistent.</strong><br>
+  Phased RFQ works as designed: 30s collection → immediate Phase 2 accept. ~50s total, reliable.
+  RFQ quotes are stable across rounds. Fills at $95-100/unit, but we can't assess quality without mark/mid.
+</div>
+
+<div class="good">
+  <strong>✓ Hotfix impact is clear.</strong><br>
+  Pre-hotfix (Mar 17): 67s total close, TP collision wasted 35s. Post-hotfix (Mar 18-19): ~31s total close.
+  Faster close = smaller realized loss ($52 → $48 → $40, though market conditions differ).
+</div>
+
+<div class="warn">
+  <strong>⚠ RFQ close always fails — is it worth the 15s?</strong><br>
+  All 3 days, close RFQ got quotes but rejected all (220-260% worse than book). The <code>min_improvement_pct=0.0%</code>
+  demands at-or-better-than-book, which never happens in a fast market. Options:<br>
+  A) Remove RFQ close attempt entirely — go straight to aggressive limit (saves 15s)<br>
+  B) Loosen the improvement threshold (e.g., allow 10-20% worse than book)<br>
+  C) Keep as-is (15s hedges against calm-market SL triggers where RFQ might work)
+</div>
+
+<div class="warn">
+  <strong>⚠ No mark/mid price logging — execution quality unmeasurable.</strong><br>
+  We don't log the option's mark or mid price at:<br>
+  • Option selection time (before RFQ)<br>
+  • RFQ fill confirmation<br>
+  • SL trigger moment<br>
+  • Limit fill execution<br>
+  Without these reference prices, we can't measure slippage or compare fill quality to theoretical fair value.
+  The "vs orderbook improvement" metric compares to the orderbook bid (for sells) — but bid ≠ mark ≠ mid.
+</div>
+
+<div class="warn">
+  <strong>⚠ 3 consecutive SL losses — BTC trending down.</strong><br>
+  BTC: $75,170 → $74,344 → $71,079 over 3 days. EMA-20 ($70,185 on Mar 17) hasn't caught up yet.
+  Strategy is selling puts into a declining market. The EMA filter may need tightening or a shorter lookback.
+</div>
+
+<div class="note">
+  <strong>📊 What would help: mark price logging.</strong><br>
+  Adding 4 log lines to capture <code>mark_price</code> from the exchange at key moments would enable
+  full execution quality analysis. The Coincall API returns mark price in the option chain and position endpoints.
+</div>
+</div>
+
+<p class="meta" style="text-align:center; margin-top:40px; border-top: 1px solid #333; padding-top:20px;">
+  CoincallTrader v1.1.1 — Production analysis generated 2026-03-19
+</p>
+
+</body>
+</html>

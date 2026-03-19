@@ -87,7 +87,7 @@ class ExchangeAccountManager(ABC):
     """Account and position queries."""
 
     @abstractmethod
-    def get_account_info(self) -> Optional[dict]:
+    def get_account_info(self, force_refresh: bool = False) -> Optional[dict]:
         """Get account summary (equity, margins, PnL, etc)."""
         ...
 

@@ -10,8 +10,8 @@ class CoincallAccountAdapter(ExchangeAccountManager):
     def __init__(self):
         self._inner = AccountManager()
 
-    def get_account_info(self):
-        return self._inner.get_account_info()
+    def get_account_info(self, force_refresh=False):
+        return self._inner.get_account_info(force_refresh=force_refresh)
 
     def get_positions(self, force_refresh=False):
         return self._inner.get_positions(force_refresh=force_refresh)

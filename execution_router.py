@@ -18,7 +18,6 @@ from typing import List, Optional
 from trade_execution import TradeExecutor, LimitFillManager, ExecutionParams
 from rfq import RFQExecutor, OptionLeg, RFQResult
 from order_manager import OrderManager, OrderPurpose
-from market_data import get_option_market_data
 
 logger = logging.getLogger(__name__)
 
@@ -191,9 +190,9 @@ class ExecutionRouter:
                     leg.fill_price = float(result.legs[i].get('price', 0.0))
             # Log + store mark price at open for each leg
             for leg in trade.open_legs:
-                mkt = get_option_market_data(leg.symbol)
+                mkt = self._market_data.get_option_details(leg.symbol)
                 if mkt:
-                    mark = mkt.get('mark_price', 0)
+                    mark = float(mkt.get('markPrice', 0))
                     trade.metadata[f"mark_at_open_{leg.symbol}"] = mark
                     if mark:
                         slip = ((leg.fill_price or 0) - mark) / mark * 100
@@ -276,9 +275,9 @@ class ExecutionRouter:
                     leg.fill_price = float(result.legs[i].get('price', 0.0))
             # Log + store mark price at close for each leg
             for leg in trade.close_legs:
-                mkt = get_option_market_data(leg.symbol)
+                mkt = self._market_data.get_option_details(leg.symbol)
                 if mkt:
-                    mark = mkt.get('mark_price', 0)
+                    mark = float(mkt.get('markPrice', 0))
                     trade.metadata[f"mark_at_close_{leg.symbol}"] = mark
                     if mark:
                         slip = ((leg.fill_price or 0) - mark) / mark * 100
