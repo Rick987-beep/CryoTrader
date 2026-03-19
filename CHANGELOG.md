@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.3] - 2026-03-19
+
+### Deribit Production Validated + New Data-Driven Strategy
+
+### Deribit Production Test — Successful
+- **First live trade on Deribit production** — Full lifecycle validated:
+  BUY 0.1 BTC-21MAR26-66000-P → filled → held 30s → closed.
+  Strategy: `prod_test_put` (aggressive limit, single-phase 10% buffer).
+  Confirmed: auth, order placement, fill detection, position monitoring,
+  close execution, PnL finalization all working on production.
+- **`strategies/prod_test_put.py`** — Minimal production test strategy
+  for Deribit: buys 0.1 BTC of a specific put, holds 30s, closes.
+
+### Optimal Entry Window Analysis — Refreshed (Feb 19 – Mar 19, 2026)
+- Re-ran hourly excursion analysis and structure backtest with 4 weeks
+  of current Binance 1h candle data (672 candles).
+- **Key findings:**
+  - Best short window: 14:00→16:00 UTC (2h), $1,295 avg excursion, $648/hr
+  - Best 4h+ window: 14:00→18:00 UTC (4h), $1,709 avg excursion, $427/hr
+  - Top backtest combo: ATM straddle, 10:00 UTC entry, $1,000 TP, 9h hold
+    → avg PnL $908, 100% win rate over 20 days
+  - ATM straddle is the only profitable structure; all strangles underwater
+
+### Added
+- **`strategies/straddle_10utc.py`** — New strategy: `ATM_Str_fixpnl_Deribit`.
+  Data-driven daily long ATM straddle for Deribit, derived from the refreshed
+  Optimal Entry Window analysis:
+  - Entry: 10:00 UTC, weekdays only
+  - Structure: long ATM straddle, 0.1 BTC/leg, next-day expiry
+  - TP: $1,000 USD fixed-dollar profit target (custom exit condition with
+    BTC→USD conversion via Deribit position `floating_profit_loss_usd`)
+  - Time exit: 19:00 UTC (9h max hold)
+  - Execution: two-phase limit orders — Phase 1: 3 min mark-price quoting
+    (reprice 30s), Phase 2: 3 min aggressive crossing (3% buffer, reprice 30s)
+  - Telegram notifications with full PnL reporting in BTC and USD
+
+### Changed
+- Updated `analysis/optimal_entry_window/hourly_excursion.json` — fresh data
+- Updated `analysis/optimal_entry_window/hourly_excursion_report.html` — fresh heatmaps
+- Updated `analysis/optimal_entry_window/backtest_report.html` — fresh backtest results
+
+### Files
+- NEW: `strategies/straddle_10utc.py`, `strategies/prod_test_put.py`
+- MODIFIED: `strategies/__init__.py`, `main.py`
+- UPDATED: `analysis/optimal_entry_window/` (3 data/report files refreshed)
+
+---
+
 ## [1.4.2] - 2026-03-19
 
 ### Deribit Phase 3 — Integration Testing & Compatibility Fixes
