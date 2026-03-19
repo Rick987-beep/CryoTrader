@@ -66,7 +66,7 @@ logger = logging.getLogger(__name__)
 # factory function below.
 
 # Structure
-QTY = 0.74                           # BTC per leg (~$63k notional, clears $50k RFQ min)
+QTY = 0.8                            # BTC per leg (~$68k notional, clears $50k RFQ min)
 TARGET_DELTA = -0.10                 # OTM put delta target
 DTE = 1                              # 1 day to expiry
 
