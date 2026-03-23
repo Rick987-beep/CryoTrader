@@ -594,19 +594,18 @@ def _on_trade_closed(trade, account) -> None:
     roi = (pnl / abs(entry_cost) * 100) if entry_cost else 0.0
     hold_seconds = trade.hold_seconds or 0
 
-    # Determine exit reason
-    tp_order_id = trade.metadata.get("tp_order_id")
+    # Determine exit reason — priority: metadata flags > PnL > hold time
     exit_reason = "unknown"
-    if pnl > 0 and tp_order_id:
+    if trade.metadata.get("tp_finalized"):
         exit_reason = "TP (limit fill)"
     elif trade.metadata.get("sl_triggered"):
         exit_reason = f"SL ({STOP_LOSS_PCT}% loss, fair-price)"
     elif pnl <= -(abs(entry_cost) * STOP_LOSS_PCT / 100):
         exit_reason = f"SL ({STOP_LOSS_PCT}% loss)"
-    elif hold_seconds > 82800:  # ~23 hours → likely expired
-        exit_reason = "expiry"
     elif pnl > 0:
-        exit_reason = "profit (other)"
+        exit_reason = "profit"
+    elif hold_seconds > 82800 and abs(pnl) < abs(entry_cost) * 0.05:
+        exit_reason = "expiry (worthless)"
 
     logger.info(
         f"[DailyPutSell] Closed: {trade.id}  |  PnL: ${pnl:+.4f}  |  "
@@ -637,7 +636,7 @@ def _on_trade_closed(trade, account) -> None:
             f"SL threshold: ${sl_threshold:.2f} ({STOP_LOSS_PCT}% loss on ${entry_price:.2f} entry)"
             if sl_threshold else "Trigger: <b>Stop Loss</b>"
         )
-    elif hold_seconds > 82800:
+    elif exit_reason.startswith("expiry"):
         trigger_text = "Trigger: <b>Expiry</b> (option expired worthless)"
     else:
         trigger_text = f"Trigger: <b>{exit_reason}</b>"

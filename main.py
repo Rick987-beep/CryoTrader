@@ -64,7 +64,8 @@ if not _DEV_MODE:
                   "rfq", "account_manager", "dashboard", "persistence",
                   "strategies.daily_put_sell", "strategies.atm_straddle",
                   "strategies.blueprint_strangle", "order_manager",
-                  "ema_filter", "telegram_notifier"):
+                  "ema_filter", "telegram_notifier", "health_check",
+                  "execution_router"):
         logging.getLogger(_name).setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
 

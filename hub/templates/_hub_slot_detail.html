@@ -250,7 +250,7 @@
           </td>
           <td>{{ "%.4f"|format(h.get('entry_cost', 0)) }}</td>
           <td>{{ h.get('hold_minutes', '?') }}</td>
-          <td>{{ h.get('closed_at', '?')[:19] }}</td>
+          <td>{{ h.get('timestamp', '')[:19] or h.get('closed_at', '?') }}</td>
         </tr>
         {% endfor %}
       </tbody>

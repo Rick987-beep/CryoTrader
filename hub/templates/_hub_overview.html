@@ -191,8 +191,10 @@
             {{ "%+.4f"|format(h.pnl) }}
           </span>
         {% endif %}
-        {% if h.get('closed_at') %}
-          <span class="muted">{{ h.closed_at[:16] }}</span>
+        {% if h.get('timestamp') %}
+          <span class="muted">{{ h.timestamp[:16] }}</span>
+        {% elif h.get('closed_at') %}
+          <span class="muted">{{ h.closed_at }}</span>
         {% endif %}
       </div>
       {% endfor %}
