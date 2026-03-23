@@ -221,7 +221,7 @@ def api_overview():
             "positions": live.get("positions", []) if live else [],
             "open_orders": live.get("open_orders", []) if live else [],
             "health": live.get("health") if live else None,
-            "active_trades": len(trades.get("trades", [])),
+            "active_trades": len([t for t in trades.get("trades", []) if t.get("state") not in ("closed", "error")]),
             "recent_history": history,
         }
         slot_data.append(slot_info)

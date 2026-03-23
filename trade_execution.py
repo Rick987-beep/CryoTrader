@@ -497,7 +497,7 @@ class LimitFillManager:
             )
             self._phase_started_at = now
             self._last_reprice_at = now
-            self._requote_unfilled()
+            self._requote_unfilled(is_phase_transition=True)
             return "requoted"
 
         # Within-phase reprice interval elapsed → reprice at same pricing
@@ -569,8 +569,17 @@ class LimitFillManager:
                 reduce_only=reduce_only,  # BUG-2026-03-05: pass reduce_only to exchange
             )
 
-    def _requote_unfilled(self) -> None:
-        """Cancel stale orders and re-place at fresh prices (phase-aware)."""
+    def _requote_unfilled(self, is_phase_transition: bool = False) -> None:
+        """Cancel stale orders and re-place at fresh prices (phase-aware).
+
+        Args:
+            is_phase_transition: True when called at a phase boundary (intentional
+                aggression step). The directional guard is bypassed so that phase
+                advances — which deliberately move the price closer to the market —
+                are never blocked.  False (default) for within-phase repricing, where
+                moving the price in the wrong direction (lower for sell, higher for
+                buy) would harm fill quality without any strategic benefit.
+        """
         self._round_started_at = time.time()  # reset timeout for legacy mode
 
         for idx, ls in enumerate(self._legs):
@@ -595,6 +604,26 @@ class LimitFillManager:
                             f"price unchanged @ {price}"
                         )
                         continue
+
+                    # Directional guard (within-phase only): never reprice to a worse level.
+                    # For sell orders, worse = lower price (less premium collected).
+                    # For buy orders, worse = higher price (more cost to close).
+                    # Phase transitions bypass this guard — they are intentional aggression steps.
+                    if not is_phase_transition:
+                        if ls.side == "sell" and price < current_record.price:
+                            logger.info(
+                                f"LimitFillManager: skipping within-phase reprice for {ls.symbol} — "
+                                f"new price ${price:.4f} < current ${current_record.price:.4f} "
+                                f"(sell directional guard)"
+                            )
+                            continue
+                        elif ls.side == "buy" and price > current_record.price:
+                            logger.info(
+                                f"LimitFillManager: skipping within-phase reprice for {ls.symbol} — "
+                                f"new price ${price:.4f} > current ${current_record.price:.4f} "
+                                f"(buy directional guard)"
+                            )
+                            continue
 
             if self._order_manager:
                 # Use OrderManager's atomic requote (cancel + replace + chain)

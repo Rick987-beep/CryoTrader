@@ -260,6 +260,7 @@ def _fair_price_sl():
             # Configure phased limit close (buy-to-close, no RFQ)
             trade.execution_mode = "limit"
             trade.metadata["sl_triggered"] = True
+            trade.metadata["sl_triggered_at"] = time.time()
             trade.execution_params = ExecutionParams(phases=[
                 # Phase 1: buy at fair price (passive)
                 ExecutionPhase(
@@ -539,6 +540,16 @@ def _on_trade_opened(trade, account) -> None:
     # Opening duration
     duration_s = int(trade.opened_at - trade.created_at) if trade.opened_at and trade.created_at else 0
 
+    # Append limit phase to exec_mode (inferred from total open duration vs phase schedule)
+    if exec_mode.startswith("Limit") and duration_s > 0:
+        limit_elapsed = duration_s - RFQ_OPEN_TIMEOUT
+        if limit_elapsed < LIMIT_OPEN_FAIR_SECONDS:
+            exec_mode += " — Phase 2.1 (at fair)"
+        elif limit_elapsed < LIMIT_OPEN_FAIR_SECONDS + LIMIT_OPEN_PARTIAL_SECONDS:
+            exec_mode += " — Phase 2.2 (stepped)"
+        else:
+            exec_mode += " — Phase 2.3 (at bid)"
+
     # Price block
     bid = fp['bid'] or 0 if fp else 0
     ask = fp['ask'] or 0 if fp else 0
@@ -669,17 +680,40 @@ def _on_trade_closed(trade, account) -> None:
         diff_pct = diff / fp['fair'] * 100
         fill_vs_fair = f"\nFill vs fair: ${close_fill:.2f} vs ${fp['fair']:.2f} ({diff_pct:+.1f}%)"
 
+    # Close execution phase (inferred from metadata and timing)
+    close_qty = (trade.close_legs[0].filled_qty if (trade.close_legs and trade.close_legs[0].filled_qty) else None) or (leg.filled_qty if leg else '?')
+    close_exec = ""
+    if trade.metadata.get("tp_finalized"):
+        close_exec = "Execution: TP limit order"
+    elif trade.metadata.get("sl_triggered"):
+        sl_triggered_at = trade.metadata.get("sl_triggered_at")
+        if sl_triggered_at and trade.closed_at:
+            close_duration = trade.closed_at - float(sl_triggered_at)
+            if close_duration < SL_CLOSE_FAIR_SECONDS:
+                close_exec = "Execution: SL close — Phase 1 (at fair)"
+            elif close_duration < SL_CLOSE_FAIR_SECONDS + SL_CLOSE_STEP_SECONDS:
+                close_exec = "Execution: SL close — Phase 2 (stepped)"
+            else:
+                close_exec = "Execution: SL close — Phase 3 (at ask)"
+        else:
+            close_exec = "Execution: SL close (phased limit)"
+    elif exit_reason.startswith("expiry"):
+        close_exec = "Execution: expired"
+
     # BTC index
     close_index = get_btc_index_price(use_cache=False)
     idx_text = f"BTC index: ${close_index:,.0f}" if close_index else "BTC index: N/A"
 
     try:
+        close_exec_line = f"{close_exec}\n" if close_exec else ""
         get_notifier().send(
             f"{emoji} <b>Daily Put Sell — Trade Closed</b>\n\n"
             f"Time: {ts}\n"
             f"ID: {trade.id}\n"
-            f"{trigger_text}\n\n"
-            f"PnL: <b>${pnl:+.2f}</b> ({roi:+.1f}%)\n"
+            f"BUY {close_qty}\u00d7 {close_symbol}\n"
+            f"{trigger_text}\n"
+            f"{close_exec_line}"
+            f"\nPnL: <b>${pnl:+.2f}</b> ({roi:+.1f}%)\n"
             f"Hold: {hold_seconds/60:.1f} min\n"
             f"{price_text}"
             f"{fill_vs_fair}\n\n"
@@ -751,19 +785,19 @@ def daily_put_sell() -> StrategyConfig:
         # execution_params: used for limit open fallback (after RFQ timeout)
         # fair pricing with aggression 0→0.67→1.0 steps from fair→spread→bid
         execution_params=ExecutionParams(phases=[
-            # Phase 2.1: sell at fair price
+            # Phase 2.1: sell at fair price — reprice_interval=duration so no mid-phase drift
             ExecutionPhase(
                 pricing="fair", fair_aggression=0.0,
                 duration_seconds=LIMIT_OPEN_FAIR_SECONDS,
-                reprice_interval=30,
+                reprice_interval=LIMIT_OPEN_FAIR_SECONDS,
             ),
-            # Phase 2.2: sell at bid + 33% of fairspread
+            # Phase 2.2: sell at bid + 33% of fairspread — reprice_interval=duration so no mid-phase drift
             ExecutionPhase(
                 pricing="fair", fair_aggression=0.67,
                 duration_seconds=LIMIT_OPEN_PARTIAL_SECONDS,
-                reprice_interval=30,
+                reprice_interval=LIMIT_OPEN_PARTIAL_SECONDS,
             ),
-            # Phase 2.3: sell at bid (aggressive)
+            # Phase 2.3: sell at bid (aggressive) — tracks bid every 15s
             ExecutionPhase(
                 pricing="fair", fair_aggression=1.0,
                 duration_seconds=LIMIT_OPEN_BID_SECONDS,
