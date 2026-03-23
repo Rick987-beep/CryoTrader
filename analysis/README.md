@@ -1,56 +1,81 @@
 # analysis/
 
-Offline analysis tools for calibrating strategy parameters using real option chain data.
+Offline analysis and backtesting tools for BTC 0DTE option strategies.
 
 ## Structure
 
 ```
 analysis/
-├── capture_snapshot.py          # Shared: captures BTC option chain snapshots
-├── data/                        # Shared: snapshot JSON files
-│   └── snapshot_YYYYMMDD_HHMM.json
-├── optimal_entry_window/        # Study: optimal 0DTE entry time & structure width
-│   ├── analyze_grid.py          #   Single-day straddle vs strangle PnL grid
-│   ├── build_grid.py            #   Multi-day 2D grid (strike offset × realized move)
-│   ├── backtest_structures.py   #   Full backtest using Binance candles + √t decay model
-│   ├── hourly_excursion.py      #   Optimal entry/exit window finder (Binance 1h candles)
-│   ├── RESEARCH_PLAN_optimal_window.html  # Research plan
-│   ├── backtest_report.html     #   Latest backtest results
-│   ├── hourly_excursion_report.html       #   Latest excursion heatmap
-│   └── hourly_excursion.json    #   Raw excursion data
+├── backtester/                  # Modular Black-Scholes backtester
+│   ├── backtest.py              #   CLI entry point & orchestrator
+│   ├── pricing.py               #   BS pricing, strike grid, vol, Deribit fees
+│   ├── data.py                  #   Binance 1h candle fetcher (with pagination)
+│   ├── straddle_strangle.py     #   Strategy: long straddle/strangle + TP trigger
+│   ├── metrics.py               #   Stats, equity curve, composite scoring
+│   ├── reporting.py             #   Console tables + HTML report generation
+│   ├── backtest_deribit_realdata.py  # Standalone: ground-truth backtest with real Deribit bid/ask
+│   └── archive/                 #   Old versions & superseded scripts
+├── capture_snapshot.py          # Captures BTC option chain snapshots from Coincall
+├── data/                        # Snapshot JSON files
+├── tardis_options/              # Deribit tardis.dev data & HistoricOptionChain module
+├── PutSelling/                  # Put-selling strategy analysis
 └── README.md
 ```
+
+## Backtester
+
+**What it does:** Simulates buying 0DTE BTC straddles/strangles across a parameter grid
+(17,640 combos) and ranks them using a 12-metric composite score.
+
+**Module flow:**
+```
+backtest.py  →  data.py (fetch candles)
+             →  straddle_strangle.py (run backtest loop)
+                    └── pricing.py (BS pricing, vol, fees)
+             →  metrics.py (stats + equity curve)
+             →  reporting.py (console + HTML)
+```
+
+**Pricing model:**
+- Black-Scholes with r=0, σ from trailing 24h hourly log returns
+- Deribit $500 strike grid, MIN(0.03% × index, 12.5% × leg) fee model
+- ±4% slippage on theoretical price
+
+**Usage:**
+```bash
+# Default: 5 weeks, weekdays only
+.venv/bin/python analysis/backtester/backtest.py
+
+# Custom window
+.venv/bin/python analysis/backtester/backtest.py --weeks 8
+
+# Include weekends
+.venv/bin/python analysis/backtester/backtest.py --include-weekends
+```
+
+**Output:** Console tables + `backtest_blackscholes_report.html` in the backtester directory.
+
+## Real-Data Backtest (Deribit)
+
+`backtester/backtest_deribit_realdata.py` is a standalone ground-truth backtest using
+actual Deribit bid/ask data from tardis.dev (no BS model). It depends on
+`analysis.tardis_options.HistoricOptionChain` and a parquet data file.
+
+This module has its own reporting layer. A future refactor could share the
+reporting module with the main backtester.
 
 ## Shared Tools
 
 | File | Purpose |
 |------|---------|
-| `capture_snapshot.py` | Captures full BTC option chain snapshots (nearest expiry) — index price, mark/bid/ask, Greeks for strikes ±$5k of ATM. Saves to `data/` as JSON. Supports hourly loop, scheduled capture, or one-shot. |
+| `capture_snapshot.py` | Captures full BTC option chain snapshots (nearest expiry) — index price, mark/bid/ask, Greeks. Saves to `data/` as JSON. |
 
-## Optimal Entry Window Study
-
-**Goal:** Determine the best UTC entry hour and structure width (straddle vs strangle ±K)
-for 0DTE BTC options, balancing move capture against theta decay.
-
-**Approach:**
-1. **Hourly excursion analysis** (`hourly_excursion.py`) — fetches 4+ weeks of Binance 1h candles, computes average max BTC excursion for every (entry_hour, exit_hour) combination, ranks windows by efficiency ($/hr).
-2. **Structure backtest** (`backtest_structures.py`) — simulates buying straddles/strangles at various entry times using Binance candle data and a √t theta-decay model calibrated from real Coincall snapshots. Tests take-profit scenarios and hold durations.
-3. **Snapshot-based grid** (`analyze_grid.py`, `build_grid.py`) — uses real Coincall option chain snapshots to compute actual PnL for each structure width across realized BTC moves.
-
-**Key findings** are in the HTML reports in `optimal_entry_window/`.
-
-## Usage
+## Capture Snapshots
 
 ```bash
-# Capture snapshots every hour (shared data collection):
+# Hourly loop:
 python -m analysis.capture_snapshot --loop
 
-# Capture at a specific UTC hour:
+# One-shot at a specific UTC hour:
 python -m analysis.capture_snapshot 12
-
-# Run optimal entry window analyses:
-python -m analysis.optimal_entry_window.hourly_excursion --weeks 4
-python -m analysis.optimal_entry_window.backtest_structures --weeks 8
-python -m analysis.optimal_entry_window.analyze_grid 20260311
-python -m analysis.optimal_entry_window.build_grid
 ```
