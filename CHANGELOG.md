@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-03-26
+
+### Added — Phased Execution & Fee-Aware Notifications (Long Strangle)
+
+#### Phased Close Execution
+- **`strategies/long_strangle_index_move.py`** — Sets `ExecutionParams` with 3
+  close phases on trade open: Phase 1 (30s fair), Phase 2 (180s aggressive),
+  Phase 3 (4h fair with `min_floor_price=0.0001` BTC — keeps deep-OTM leg
+  visible in orderbook without blocking the close).
+- **`trade_execution.py`** — Added `min_floor_price: Optional[float]` field to
+  `ExecutionPhase`. `LimitFillManager` uses it as a last-resort fallback when
+  computed price is None or zero (e.g. no bids for deep-OTM leg), instead of
+  skipping the order entirely.
+
+#### Telegram Notification Overhaul (Long Strangle)
+- **Open message** — Per-leg fill price + cost in BTC/USD, entry fees (Deribit
+  fee model: `min(0.03% × index, 12.5% × option_price)`), total outlay.
+- **Close message** — Full entry/exit breakdown: per-leg exit proceeds, exit
+  fees, net proceeds, gross PnL, total fees, net PnL with ROI %, index at
+  entry → close, index move distance.
+- Added `_leg_fee_btc()` and `_btc_usd()` helper functions.
+
+### Changed
+- **`slots/slot-02.toml`** — `close_hour` 19 → 18; `move_distance_usd` 1500 → 1100
+- **`deployment/rsync-exclude-slot.txt`** — Added `backtester2/` to rsync slot
+  exclude list (dev-only, not deployed to slots)
+
 ## [1.7.0] - 2026-03-25
 
 ### Added — Backtester V2 (Real Deribit Prices)

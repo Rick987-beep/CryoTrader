@@ -188,6 +188,13 @@ class ExecutionPhase:
             Returns None if the floor is not met — causing the order to be
             skipped/failed rather than placed at an unacceptable price.
             Has no effect on buy orders or other pricing modes.
+        min_floor_price: Absolute minimum price (in BTC) used as a last-resort
+            fallback when pricing would otherwise return None (e.g. no bids in
+            orderbook).  If set (e.g. 0.0001), a None or zero computed price is
+            replaced with this value instead of skipping the leg.  Useful for
+            deep-OTM legs that may expire worthless — placing at the minimum
+            tick ensures the order is visible without blocking the close.
+            Has no effect when a valid price is already computed.
     """
     pricing: str = "aggressive"
     duration_seconds: float = 30.0
@@ -195,6 +202,7 @@ class ExecutionPhase:
     fair_aggression: float = 0.0
     reprice_interval: float = 30.0
     min_price_pct_of_fair: Optional[float] = None
+    min_floor_price: Optional[float] = None
 
     def __post_init__(self):
         allowed = {"aggressive", "mid", "top_of_book", "mark", "passive", "fair"}
@@ -859,10 +867,22 @@ class LimitFillManager:
                         return mark * (1.0 + a * 0.2)
                     return fair
 
-            return None
+            price = None
         except Exception as e:
             logger.error(f"LimitFillManager: error computing {phase.pricing} price for {symbol}: {e}")
-            return None
+            price = None
+
+        # min_floor_price: last-resort fallback for deep-OTM legs with no bids.
+        # Only activates when the computed price is None or zero — never overrides
+        # a valid price, and never interacts with min_price_pct_of_fair.
+        if (price is None or price <= 0) and phase.min_floor_price is not None:
+            logger.info(
+                f"LimitFillManager: no valid price for {symbol} ({side}) "
+                f"— using min_floor_price {phase.min_floor_price} BTC"
+            )
+            return phase.min_floor_price
+
+        return price
 
     def _get_aggressive_price(self, symbol: str, side: str) -> Optional[float]:
         """Fetch best bid/ask and apply aggressive buffer (legacy mode)."""

@@ -41,6 +41,7 @@ from strategy import (
     # Exit conditions
     time_exit,
 )
+from trade_execution import ExecutionParams, ExecutionPhase
 from telegram_notifier import get_notifier
 
 logger = logging.getLogger(__name__)
@@ -126,6 +127,20 @@ def index_move_distance(distance_usd):
     return _check
 
 
+# ─── Fee Helper ─────────────────────────────────────────────────────────────
+
+def _leg_fee_btc(fill_price_btc: float, qty: float) -> float:
+    """Deribit fee per leg: min(0.03% of underlying, 12.5% of option price) × qty.
+    Inputs are in BTC (Deribit native). 0.03% of underlying = 0.0003 BTC per contract.
+    """
+    return min(0.0003, 0.125 * fill_price_btc) * qty
+
+
+def _btc_usd(btc: float, index: float) -> str:
+    """Format a BTC amount with its USD equivalent in brackets."""
+    return f"{btc:.6f} BTC  (${btc * index:,.2f})"
+
+
 # ─── Trade Callbacks ────────────────────────────────────────────────────────
 
 def _on_trade_opened(trade, account) -> None:
@@ -140,25 +155,67 @@ def _on_trade_opened(trade, account) -> None:
     else:
         logger.warning("[Long Strangle] Could not capture entry index price!")
 
+    # Set phased close execution params now that the trade is open.
+    # Phase 1 (30s):   fair price — fast fill on the profitable leg
+    # Phase 2 (180s):  aggressive — ensures the in-the-money leg closes
+    # Phase 3 (24h+):  fair price with 0.0001 BTC floor — handles deep-OTM
+    #                  leg that may have little/no bids; expires worthless
+    #                  if never filled, which is an acceptable outcome
+    trade.execution_params = ExecutionParams(phases=[
+        ExecutionPhase(
+            pricing="fair",
+            duration_seconds=30,
+            reprice_interval=30,
+        ),
+        ExecutionPhase(
+            pricing="aggressive",
+            duration_seconds=180,
+            buffer_pct=2.0,
+            reprice_interval=30,
+        ),
+        ExecutionPhase(
+            pricing="fair",
+            duration_seconds=4 * 3600,  # 4h — covers until ~23:00 UTC at latest,
+            reprice_interval=60,        # clear of 08:00 UTC expiry and next day's cycle
+            min_floor_price=0.0001,     # fallback for deep-OTM leg with no bids
+        ),
+    ])
+
     ts = datetime.now(timezone.utc).strftime("%H:%M UTC")
-    entry_cost_btc = trade.total_entry_cost()  # BTC on Deribit
-    entry_cost_usd = entry_cost_btc * index_price if index_price else None
-    legs_text = "\n".join(
-        f"  {leg.side.upper()} {leg.qty}× {leg.symbol}"
-        for leg in trade.open_legs
-    )
-    idx_text = f"BTC index: ${index_price:,.0f}" if index_price else "BTC index: N/A"
-    cost_text = f"${entry_cost_usd:,.2f}" if entry_cost_usd is not None else f"{entry_cost_btc:.6f} BTC"
+    idx = index_price or 0.0
+
+    # Per-leg cost and fees
+    legs_text = ""
+    total_entry_btc = 0.0
+    total_entry_fees_btc = 0.0
+    for leg in trade.open_legs:
+        fp = leg.fill_price
+        qty = leg.filled_qty if leg.filled_qty > 0 else leg.qty
+        if fp is not None:
+            cost_btc = fp * qty
+            fee_btc = _leg_fee_btc(fp, qty)
+            total_entry_btc += cost_btc
+            total_entry_fees_btc += fee_btc
+            cost_str = _btc_usd(cost_btc, idx) if idx else f"{cost_btc:.6f} BTC"
+            legs_text += f"  {leg.side.upper()} {qty}× {leg.symbol}  {cost_str}\n"
+        else:
+            legs_text += f"  {leg.side.upper()} {qty}× {leg.symbol}\n"
+
+    total_outlay_btc = total_entry_btc + total_entry_fees_btc
+
     try:
         get_notifier().send(
             f"📊 <b>Long Strangle (Index Move) — Trade Opened</b>\n"
-            f"Time: {ts}\n"
+            f"Time: {ts}  |  BTC: ${idx:,.0f}\n"
             f"ID: {trade.id}\n"
             f"{legs_text}\n"
-            f"Entry cost: {cost_text}\n"
-            f"{idx_text}  |  Trigger: ±${MOVE_DISTANCE_USD}  |  Hard close: {CLOSE_HOUR:02d}:00 UTC\n"
-            f"Equity: ${account.equity:,.2f}\n"
-            f"Avail margin: ${account.available_margin:,.2f} "
+            f"Entry cost:   {_btc_usd(total_entry_btc, idx)}\n"
+            f"Entry fees:   {_btc_usd(total_entry_fees_btc, idx)}\n"
+            f"Total outlay: {_btc_usd(total_outlay_btc, idx)}\n"
+            f"\n"
+            f"Trigger: ±${MOVE_DISTANCE_USD:,}  |  Hard close: {CLOSE_HOUR:02d}:00 UTC\n"
+            f"Equity: ${account.equity:,.2f}  |  "
+            f"Avail: ${account.available_margin:,.2f} "
             f"({100 - account.margin_utilization:.1f}% free)"
         )
     except Exception:
@@ -170,54 +227,79 @@ def _on_trade_closed(trade, account) -> None:
     entry_index = trade.metadata.get("entry_index_price")
     close_index = _get_index_price(use_cache=False)
     index_move = abs(close_index - entry_index) if (entry_index and close_index) else None
-
-    # fill_price is in BTC on Deribit — convert to USD for display
-    pnl_btc = trade.realized_pnl if trade.realized_pnl is not None else 0.0
-    entry_cost_btc = trade.total_entry_cost()
-    ref_price = close_index or entry_index  # best available index for conversion
-    pnl_usd = pnl_btc * ref_price if ref_price else None
-    entry_cost_usd = entry_cost_btc * ref_price if ref_price else None
-    roi = (pnl_usd / abs(entry_cost_usd) * 100) if entry_cost_usd else 0.0
+    ref = close_index or entry_index or 0.0  # best available for exit/PnL USD display
     hold_seconds = trade.hold_seconds or 0
 
-    pnl_display = f"${pnl_usd:+,.2f}" if pnl_usd is not None else f"{pnl_btc:+.6f} BTC"
-    cost_display = f"${entry_cost_usd:,.2f}" if entry_cost_usd is not None else f"{entry_cost_btc:.6f} BTC"
+    # ── Entry side (always priced in entry_index for accuracy) ───────────────
+    entry_idx = entry_index or ref
+    total_entry_btc = 0.0
+    total_entry_fees_btc = 0.0
+    for leg in trade.open_legs:
+        fp = leg.fill_price
+        qty = leg.filled_qty if leg.filled_qty > 0 else leg.qty
+        if fp is not None:
+            total_entry_btc += fp * qty
+            total_entry_fees_btc += _leg_fee_btc(fp, qty)
+    total_outlay_btc = total_entry_btc + total_entry_fees_btc
 
-    msg = (
+    # ── Exit side ────────────────────────────────────────────────────────────
+    legs_text = ""
+    total_exit_btc = 0.0
+    total_exit_fees_btc = 0.0
+    for leg in (trade.close_legs or []):
+        fp = leg.fill_price
+        qty = leg.filled_qty if leg.filled_qty > 0 else leg.qty
+        if fp is not None:
+            proceeds_btc = fp * qty
+            fee_btc = _leg_fee_btc(fp, qty)
+            total_exit_btc += proceeds_btc
+            total_exit_fees_btc += fee_btc
+            proc_str = _btc_usd(proceeds_btc, ref) if ref else f"{proceeds_btc:.6f} BTC"
+            legs_text += f"  {leg.side.upper()} {qty}× {leg.symbol}  {proc_str}\n"
+        else:
+            legs_text += f"  {leg.side.upper()} {qty}× {leg.symbol}\n"
+    net_proceeds_btc = total_exit_btc - total_exit_fees_btc
+
+    # ── PnL ──────────────────────────────────────────────────────────────────
+    gross_pnl_btc = trade.realized_pnl if trade.realized_pnl is not None else 0.0
+    total_fees_btc = total_entry_fees_btc + total_exit_fees_btc
+    net_pnl_btc = gross_pnl_btc - total_fees_btc
+    roi = (net_pnl_btc / total_outlay_btc * 100) if total_outlay_btc else 0.0
+
+    logger.info(
         f"[Long Strangle] Trade closed: {trade.id}  |  "
-        f"PnL: {pnl_display} ({roi:+.1f}%)  |  "
-        f"Hold: {hold_seconds / 60:.1f} min  |  "
-        f"Entry cost: {cost_display}"
+        f"Gross PnL: {gross_pnl_btc:+.6f} BTC  |  "
+        f"Fees: {total_fees_btc:.6f} BTC  |  "
+        f"Net PnL: {net_pnl_btc:+.6f} BTC  |  "
+        f"Hold: {hold_seconds / 60:.1f} min"
+        + (f"  |  Index move: ${index_move:.0f}" if index_move else "")
     )
-    if index_move is not None:
-        msg += f"  |  Index move: ${index_move:.0f}"
-    logger.info(msg)
 
     ts = datetime.now(timezone.utc).strftime("%H:%M UTC")
-    emoji = "✅" if (pnl_usd or pnl_btc) >= 0 else "❌"
-    legs_text = ""
-    if trade.close_legs:
-        def _leg_line(leg):
-            if leg.fill_price and ref_price:
-                return (f"  {leg.side.upper()} {leg.filled_qty}× {leg.symbol}"
-                        f" @ ${leg.fill_price * ref_price:,.2f}")
-            return f"  {leg.side.upper()} {leg.filled_qty}× {leg.symbol}"
-        legs_text = "\n".join(_leg_line(leg) for leg in trade.close_legs) + "\n"
-    entry_idx_text = f"Entry index: ${entry_index:,.0f}" if entry_index else ""
-    close_idx_text = f"Close index: ${close_index:,.0f}" if close_index else ""
-    idx_text = f"Index move: ${index_move:,.0f}" if index_move is not None else ""
+    emoji = "✅" if net_pnl_btc >= 0 else "❌"
+    move_text = f"${index_move:,.0f}" if index_move is not None else "N/A"
     try:
         get_notifier().send(
             f"{emoji} <b>Long Strangle (Index Move) — Trade Closed</b>\n"
-            f"Time: {ts}\n"
-            f"ID: {trade.id}\n"
-            f"PnL: <b>{pnl_display}</b> ({roi:+.1f}%)\n"
-            f"Hold: {hold_seconds / 60:.1f} min\n"
-            f"Entry cost: {cost_display}\n"
-            f"{legs_text}"
-            f"{entry_idx_text}  →  {close_idx_text}  |  {idx_text}\n"
-            f"Equity: ${account.equity:,.2f}\n"
-            f"Avail margin: ${account.available_margin:,.2f} "
+            f"Time: {ts}  |  BTC: ${ref:,.0f}\n"
+            f"ID: {trade.id}  |  Hold: {hold_seconds / 60:.1f} min\n"
+            f"{legs_text}\n"
+            f"Entry cost:    {_btc_usd(total_entry_btc, entry_idx)}\n"
+            f"Entry fees:    {_btc_usd(total_entry_fees_btc, entry_idx)}\n"
+            f"Total outlay:  {_btc_usd(total_outlay_btc, entry_idx)}\n"
+            f"\n"
+            f"Exit proceeds: {_btc_usd(total_exit_btc, ref)}\n"
+            f"Exit fees:     {_btc_usd(total_exit_fees_btc, ref)}\n"
+            f"Net proceeds:  {_btc_usd(net_proceeds_btc, ref)}\n"
+            f"\n"
+            f"Gross PnL:    {gross_pnl_btc:+.6f} BTC  (${gross_pnl_btc * ref:+,.2f})\n"
+            f"Total fees:    {total_fees_btc:.6f} BTC  (${total_fees_btc * ref:,.2f})\n"
+            f"Net PnL:      <b>{net_pnl_btc:+.6f} BTC  (${net_pnl_btc * ref:+,.2f})</b>  "
+            f"(ROI: {roi:+.1f}%)\n"
+            f"\n"
+            f"Index at entry: ${entry_index:,.0f}  →  at close: ${close_index:,.0f}  |  Move: {move_text}\n"
+            f"Equity: ${account.equity:,.2f}  |  "
+            f"Avail: ${account.available_margin:,.2f} "
             f"({100 - account.margin_utilization:.1f}% free)"
         )
     except Exception:

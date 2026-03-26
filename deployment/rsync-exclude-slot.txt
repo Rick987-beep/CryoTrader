@@ -34,6 +34,7 @@ hub/
 # ── Development-only directories ────────────────────────────────────────
 archive/
 analysis/
+backtester2/
 docs/
 tests/
 
