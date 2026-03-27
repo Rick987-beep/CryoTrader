@@ -262,6 +262,7 @@ class _LegFillState:
     fill_price: Optional[float] = None
     requote_count: int = 0
     started_at: float = field(default_factory=time.time)
+    _fill_baseline: float = 0.0  # cumulative fills before the current order was placed
 
     @property
     def is_filled(self) -> bool:
@@ -485,8 +486,9 @@ class LimitFillManager:
                 if self._order_manager:
                     record = self._order_manager.poll_order(ls.order_id)
                     if record:
-                        if record.filled_qty > ls.filled_qty:
-                            ls.filled_qty = record.filled_qty
+                        new_total = ls._fill_baseline + record.filled_qty
+                        if new_total > ls.filled_qty:
+                            ls.filled_qty = new_total
                             ls.fill_price = record.avg_fill_price or ls.fill_price
                             logger.info(
                                 f"LimitFillManager: {ls.symbol} filled "
@@ -502,8 +504,9 @@ class LimitFillManager:
                     info = self._executor.get_order_status(ls.order_id)
                     if info:
                         executed = float(info.get('fillQty', 0))
-                        if executed > ls.filled_qty:
-                            ls.filled_qty = executed
+                        new_total = ls._fill_baseline + executed
+                        if new_total > ls.filled_qty:
+                            ls.filled_qty = new_total
                             ls.fill_price = float(info.get('avgPrice', 0)) or ls.fill_price
                             logger.info(
                                 f"LimitFillManager: {ls.symbol} filled "
@@ -713,6 +716,7 @@ class LimitFillManager:
                         ls.order_id, new_price=price, new_qty=ls.remaining_qty,
                     )
                     if new_record:
+                        ls._fill_baseline = ls.filled_qty  # snapshot before linking new order
                         ls.order_id = new_record.order_id
                         ls.requote_count += 1
                         # Sync any fills captured during the poll inside requote
@@ -750,6 +754,7 @@ class LimitFillManager:
                         reduce_only=getattr(self, '_reduce_only', False),  # BUG-2026-03-05
                     )
                     if result:
+                        ls._fill_baseline = ls.filled_qty  # snapshot before linking new order
                         ls.order_id = str(result.get('orderId', ''))
                         ls.requote_count += 1
                         logger.info(

@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-03-27
+
+### Added — Exchange Reachability Monitoring & Tick Recorder
+
+#### Exchange Reachability Tracking
+- **`exchanges/base.py`** — `reachable` abstract property added to `ExchangeAuth` interface
+- **`auth.py`** — `reachable` property with consecutive failure counter (threshold: 3); auto HTTP session refresh after 5 sustained failures; 4xx client errors treated as reachable (exchange is responding)
+- **`exchanges/deribit/auth.py`** — Same reachability tracking for Deribit: `_record_success()` / `_record_failure()` on all GET, POST, and RPC calls
+- **`exchanges/coincall/auth.py`** — Exposes `reachable` from inner `CoincallAuth`
+- **`account_manager.py`** (`PositionMonitor`) — Adaptive poll backoff (3× interval, max 60s) when exchange is unreachable; Telegram alert on down/recovered transitions; accepts optional `auth` argument
+
+#### Tick Recorder Service
+- **`backtester2/tickrecorder/`** — New service: captures 5-min Deribit IV snapshots to disk for backtesting
+- **`deployment/ct-recorder.service`** — systemd unit for the tick recorder
+- **`deployment/rsync-exclude-recorder.txt`** — rsync exclude list for recorder deployments
+- **`deployment/deploy-slot.sh`** — `recorder` target: full deploy, setup (dir/venv/service), start/stop/restart/logs/status commands; `status-all` now shows recorder health
+- **`hub/hub_dashboard.py`** — Exchange health lights (Coincall + Deribit probes) in overview; `/api/recorder` endpoint returning recorder health card with next-snapshot countdown
+- **`hub/templates/_hub_recorder.html`** — Recorder health card template
+- **`hub/templates/_hub_overview.html`** — Exchange status indicator lights (CC / DB) in summary bar
+
+### Changed
+- **`hub/templates/hub_dashboard.html`** — CSS for recorder card and exchange health lights
+- **`backtester2/strategies/straddle_strangle.py`** — Strategy updates
+
+### Removed
+- **`backtester2/metrics.py`**, **`backtester2/reporting.py`** — Replaced by updated implementations
+- **`backtester2/test_phase2.py`**, **`backtester2/test_phase2_validation.py`**, **`backtester2/test_phase3.py`** — Dev test scripts removed
+
 ## [1.8.0] - 2026-03-26
 
 ### Added — Phased Execution & Fee-Aware Notifications (Long Strangle)

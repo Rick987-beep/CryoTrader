@@ -20,9 +20,10 @@ each sync.
 │  accounts.toml            │                    │   /opt/ct/                       │
 │  slots/slot-01.toml       │  auto-generates    │   ├── slot-01/  (strategy A)     │
 │  slots/slot-02.toml       │  .env.slot-XX      │   ├── slot-02/  (strategy B)     │
-│  .env  (secrets vault)    │  from .toml + .env │   └── hub/      (dashboard)      │
-│  .deploy.slots.env        │                    │                                  │
+│  .env  (secrets vault)    │  from .toml + .env │   ├── hub/      (dashboard)      │
+│  .deploy.slots.env        │                    │   └── recorder/ (tick data)      │
 │  .env.hub                 │                    │                                  │
+│  .env.recorder            │                    │                                  │
 └──────────────────────────┘                    └──────────────────────────────────┘
 ```
 
@@ -34,13 +35,15 @@ The hub dashboard auto-discovers slots and aggregates their data.
 ## Quick Start
 
 ```bash
-# 1. One-time: setup slot + hub on the VPS
+# 1. One-time: setup slot + hub + recorder on the VPS
 ./deployment/deploy-slot.sh 01 --setup
 ./deployment/deploy-slot.sh hub --setup
+./deployment/deploy-slot.sh recorder --setup
 
 # 2. Deploy
 ./deployment/deploy-slot.sh 01
 ./deployment/deploy-slot.sh hub
+./deployment/deploy-slot.sh recorder
 ```
 
 ---
@@ -111,6 +114,18 @@ HUB_PORT=8070
 HUB_SLOTS_BASE=/opt/ct
 ```
 
+### .env.recorder
+
+```bash
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
+RECORDER_DATA_DIR=/opt/ct/recorder/data
+```
+
+The recorder shares Telegram credentials with the trading slots. `RECORDER_DATA_DIR` sets where
+parquet files are written on the server. Additional `RECORDER_*` overrides are available — see
+`backtester2/tickrecorder/config.py` for the full list.
+
 ---
 
 ## Port Layout
@@ -119,6 +134,7 @@ HUB_SLOTS_BASE=/opt/ct
 |---|---|---|
 | Hub dashboard | `HUB_PORT` in `.env.hub` (default 8070) | External (firewall) |
 | Slot control endpoints | `DASHBOARD_PORT` in `.env.slot-XX` (8091, 8092, ...) | Localhost only |
+| Recorder health | `8090` (fixed, not configurable) | Localhost only |
 
 ---
 
@@ -140,8 +156,17 @@ HUB_SLOTS_BASE=/opt/ct
 ./deployment/deploy-slot.sh hub --logs    # Tail hub logs
 ./deployment/deploy-slot.sh hub --status  # Hub service status
 
+# Recorder (tick data):
+./deployment/deploy-slot.sh recorder --setup    # One-time: dirs, venv, systemd
+./deployment/deploy-slot.sh recorder            # Deploy + start (timing window check applied)
+./deployment/deploy-slot.sh recorder --logs     # Tail live logs
+./deployment/deploy-slot.sh recorder --status   # Service status
+./deployment/deploy-slot.sh recorder --restart  # Restart without redeploy
+./deployment/deploy-slot.sh recorder --stop     # Stop the recorder
+./deployment/deploy-slot.sh recorder --start    # Start the recorder
+
 # Overview:
-./deployment/deploy-slot.sh status        # All slots + hub at a glance
+./deployment/deploy-slot.sh status        # All slots + hub + recorder at a glance
 ```
 
 ---
@@ -164,15 +189,70 @@ HUB_SLOTS_BASE=/opt/ct
 
 | File | Purpose |
 |---|---|
-| `deployment/deploy-slot.sh` | Single deploy script for all slots + hub |
+| `deployment/deploy-slot.sh` | Single deploy script for all slots + hub + recorder |
 | `deployment/ct-slot@.service` | systemd template unit (slot-01, slot-02, ...) |
 | `deployment/ct-hub.service` | systemd unit for the hub dashboard |
+| `deployment/ct-recorder.service` | systemd unit for the tick recorder |
 | `deployment/rsync-exclude-slot.txt` | Files excluded from slot sync |
+| `deployment/rsync-exclude-recorder.txt` | Files excluded from recorder sync |
 | `deployment/server-setup-slots.sh` | One-time server base setup |
 | `deployment/UBUNTU_DEPLOYMENT.md` | This document |
 | `accounts.toml` | Named account registry (git-tracked) |
 | `slots/slot-XX.toml` | Per-slot config (git-tracked) |
 | `slot_config.py` | TOML → .env generator |
+
+---
+
+## Tick Recorder (Deribit BTC Options Data)
+
+The recorder is an independent service (`ct-recorder`) that captures Deribit BTC options tick data
+in 5-minute snapshots. It runs at `/opt/ct/recorder/` alongside the trading slots and is shown
+as a health card in the hub dashboard.
+
+### What it does
+
+- Connects to Deribit via WebSocket and discovers all active BTC option instruments (~968)
+- Every 5 minutes: subscribes to all ticker channels for a 10-second burst window, captures a
+  full chain snapshot, then unsubscribes immediately (burst-mode keeps bandwidth to ~860 MB/day)
+- Writes one row per instrument per snapshot to a daily zstd-compressed parquet file
+- Tracks BTC/USD spot index as 1-minute OHLC in a separate parquet file
+- Exposes a health endpoint at `localhost:8090/health` — polled by the hub dashboard
+- Sends Telegram alerts on startup, shutdown, disconnection, low disk, and data gaps
+
+### Output files
+
+Written to `/opt/ct/recorder/data/` (configured via `RECORDER_DATA_DIR` in `.env.recorder`):
+
+- `options_YYYY-MM-DD.parquet` — full BTC option chain, one row per instrument per 5-min snapshot
+- `spot_track_YYYY-MM-DD.parquet` — 1-min BTC index OHLC
+
+### Setup
+
+```bash
+# 1. Create .env.recorder
+cp /dev/null .env.recorder
+# Add: TELEGRAM_BOT_TOKEN=...
+# Add: TELEGRAM_CHAT_ID=...
+# Add: RECORDER_DATA_DIR=/opt/ct/recorder/data
+
+# 2. One-time server setup
+./deployment/deploy-slot.sh recorder --setup
+
+# 3. Deploy
+./deployment/deploy-slot.sh recorder
+```
+
+### Deploy timing safety
+
+The deploy script enforces a **2-minute timing window**: it refuses to deploy within 2 minutes
+of the next 5-minute snapshot boundary. This protects the subscription window (which opens 10
+seconds before the boundary). If you hit this guard, wait until after the boundary and retry:
+
+```bash
+# Error: "Too close to next snapshot boundary (HH:MM UTC, Xs away) — retry after HH:MM"
+# Just wait for the boundary to pass, then re-run:
+./deployment/deploy-slot.sh recorder
+```
 
 ---
 
@@ -210,12 +290,18 @@ Each slot runs as an instance of the `ct-slot@` template:
 # From dev machine:
 ./deployment/deploy-slot.sh 01 --status
 ./deployment/deploy-slot.sh 01 --logs
+./deployment/deploy-slot.sh hub --status
+./deployment/deploy-slot.sh hub --logs
+./deployment/deploy-slot.sh recorder --status
+./deployment/deploy-slot.sh recorder --logs
 
 # Or directly on the VPS:
 sudo systemctl status ct-slot@01
 sudo journalctl -u ct-slot@01 -f
 sudo systemctl status ct-hub
 sudo journalctl -u ct-hub -f
+sudo systemctl status ct-recorder
+sudo journalctl -u ct-recorder -f
 ```
 
 ### Crash recovery
@@ -270,4 +356,23 @@ ssh -v root@46.225.137.92
 **Check all services at once:**
 ```bash
 ./deployment/deploy-slot.sh status
+```
+
+**Recorder won't deploy (timing safety error):**
+```bash
+# "Too close to next snapshot boundary" — wait until after the :00/:05/:10/... minute mark
+./deployment/deploy-slot.sh recorder --status   # check if it's still running
+# then retry once the boundary passes
+```
+
+**Recorder stopped capturing data:**
+```bash
+./deployment/deploy-slot.sh recorder --logs     # look for WebSocket errors or data gaps
+./deployment/deploy-slot.sh recorder --restart  # restart if stuck
+```
+
+**Hub health card shows recorder offline:**
+```bash
+./deployment/deploy-slot.sh recorder --status
+# Recorder health endpoint is on localhost:8090 — only accessible from the VPS
 ```

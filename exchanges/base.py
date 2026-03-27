@@ -15,6 +15,12 @@ from typing import Any, Optional
 class ExchangeAuth(ABC):
     """Authenticated HTTP client for an exchange."""
 
+    @property
+    @abstractmethod
+    def reachable(self) -> bool:
+        """True when the exchange is responding, False after consecutive failures."""
+        ...
+
     @abstractmethod
     def get(self, endpoint: str, **kwargs) -> dict:
         """Send authenticated GET request, return parsed JSON."""

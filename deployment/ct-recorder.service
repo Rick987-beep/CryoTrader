@@ -1,0 +1,54 @@
+# ===========================================================================
+# CoincallTrader — Deribit BTC Options Tick Recorder
+#
+# Runs as a persistent daemon at /opt/ct/recorder/.
+# Data written to /opt/ct/recorder/data/ (set via RECORDER_DATA_DIR in .env).
+# Health endpoint on localhost:8090.
+#
+# Installation (handled by deploy-slot.sh recorder --setup):
+#   cp deployment/ct-recorder.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable ct-recorder
+#
+# Usage:
+#   systemctl start|stop|restart|status ct-recorder
+#   journalctl -u ct-recorder -f
+# ===========================================================================
+
+[Unit]
+Description=CoincallTrader — Deribit Tick Recorder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+WorkingDirectory=/opt/ct/recorder
+ExecStart=/opt/ct/recorder/.venv/bin/python -m backtester2.tickrecorder.recorder
+
+# Load recorder-specific env (TELEGRAM_*, RECORDER_DATA_DIR, etc.)
+EnvironmentFile=/opt/ct/recorder/.env
+Environment=PYTHONUNBUFFERED=1
+
+# Restart on crash with 10s delay to avoid hammering Deribit on tight loops
+Restart=on-failure
+RestartSec=10
+
+# Logs → journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ct-recorder
+
+# Resource limits — recorder is lightweight; 200 MB is generous
+LimitNOFILE=65535
+MemoryMax=200M
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/ct/recorder/data /opt/ct/recorder/logs
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

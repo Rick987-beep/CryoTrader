@@ -356,6 +356,116 @@ cmd_hub_logs()    { check_connection; remote "sudo journalctl -u ct-hub -f"; }
 cmd_hub_status()  { check_connection; remote "sudo systemctl status ct-hub --no-pager"; }
 
 # ===========================================================================
+# Recorder commands
+# ===========================================================================
+
+cmd_recorder_deploy() {
+    local rec_dir="$CT_BASE/recorder"
+    local env_file="$PROJECT_ROOT/.env.recorder"
+
+    if [[ ! -f "$env_file" ]]; then
+        fail ".env.recorder not found.\nCreate it with:\n  TELEGRAM_BOT_TOKEN=...\n  TELEGRAM_CHAT_ID=...\n  RECORDER_DATA_DIR=/opt/ct/recorder/data"
+    fi
+
+    # Safety check: refuse to deploy within 2 minutes of the next 5-min snapshot boundary.
+    # Deploying too close risks missing a snapshot (subscribe window opens 10s before boundary).
+    local now_secs interval=300 next_boundary secs_until
+    now_secs=$(date +%s)
+    next_boundary=$(( (now_secs / interval + 1) * interval ))
+    secs_until=$(( next_boundary - now_secs ))
+    if (( secs_until < 120 )); then
+        local next_time
+        next_time=$(date -u -d "@$next_boundary" '+%H:%M UTC' 2>/dev/null \
+                    || date -u -r "$next_boundary" '+%H:%M UTC')
+        fail "Too close to next snapshot boundary ($next_time, ${secs_until}s away).\nRetry after $next_time."
+    fi
+    echo -e "  ${GREEN}✓${NC} Safe deploy window (${secs_until}s until next snapshot)"
+
+    step "Checking VPS connectivity"
+    check_connection
+    ok "Connected to $VPS_HOST"
+
+    step "Stopping ct-recorder"
+    remote "sudo systemctl stop ct-recorder 2>/dev/null || true"
+    ok "Service stopped (or was not running)"
+
+    step "Syncing recorder to $VPS_HOST:$rec_dir"
+    local ssh_cmd="ssh $SSH_OPTS"
+    # shellcheck disable=SC2086
+    rsync -azv --delete \
+        --exclude-from="$SCRIPT_DIR/rsync-exclude-recorder.txt" \
+        -e "$ssh_cmd" \
+        "$PROJECT_ROOT/" \
+        "$VPS_HOST:$rec_dir/"
+    ok "Code synced"
+
+    step "Deploying .env.recorder"
+    # shellcheck disable=SC2086
+    scp $SSH_OPTS "$env_file" "$VPS_HOST:$rec_dir/.env"
+    ok ".env.recorder → $rec_dir/.env"
+
+    step "Installing Python dependencies"
+    remote "cd $rec_dir && .venv/bin/pip install -q -r requirements.txt"
+    ok "Dependencies up to date"
+
+    step "Starting ct-recorder"
+    remote "sudo systemctl start ct-recorder"
+    sleep 2
+    if remote "sudo systemctl is-active --quiet ct-recorder"; then
+        ok "Recorder is running"
+    else
+        fail "Recorder failed to start — check: ./deployment/deploy-slot.sh recorder --logs"
+    fi
+
+    step "Recent logs"
+    remote "sudo journalctl -u ct-recorder -n 15 --no-pager" || true
+
+    echo -e "\n${GREEN}════════════════════════════════════════${NC}"
+    echo -e "${GREEN}  Recorder deployed!${NC}"
+    echo -e "${GREEN}════════════════════════════════════════${NC}"
+}
+
+cmd_recorder_setup() {
+    local rec_dir="$CT_BASE/recorder"
+
+    step "Checking VPS connectivity"
+    check_connection
+    ok "Connected to $VPS_HOST"
+
+    step "Creating recorder directories"
+    remote "mkdir -p $rec_dir/data $rec_dir/logs"
+    ok "$rec_dir/data and $rec_dir/logs created"
+
+    step "Creating Python venv"
+    remote "
+        if [ ! -d $rec_dir/.venv ]; then
+            python3 -m venv $rec_dir/.venv
+            $rec_dir/.venv/bin/pip install --upgrade pip -q
+        fi
+    "
+    ok "Virtual environment ready"
+
+    step "Installing systemd service"
+    local ssh_cmd="ssh $SSH_OPTS"
+    # shellcheck disable=SC2086
+    scp $SSH_OPTS "$SCRIPT_DIR/ct-recorder.service" "$VPS_HOST:/etc/systemd/system/ct-recorder.service"
+    remote "sudo systemctl daemon-reload"
+    remote "sudo systemctl enable ct-recorder 2>/dev/null || true"
+    ok "ct-recorder service enabled"
+
+    echo -e "\n${GREEN}Recorder setup complete!${NC}"
+    echo -e "Next steps:"
+    echo -e "  1. Create ${CYAN}.env.recorder${NC} (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, RECORDER_DATA_DIR)"
+    echo -e "  2. Deploy with: ${CYAN}./deployment/deploy-slot.sh recorder${NC}"
+}
+
+cmd_recorder_stop()    { check_connection; remote "sudo systemctl stop ct-recorder"; ok "Recorder stopped"; }
+cmd_recorder_start()   { check_connection; remote "sudo systemctl start ct-recorder"; sleep 2; ok "Recorder started"; }
+cmd_recorder_restart() { check_connection; remote "sudo systemctl restart ct-recorder"; sleep 2; ok "Recorder restarted"; }
+cmd_recorder_logs()    { check_connection; remote "sudo journalctl -u ct-recorder -f"; }
+cmd_recorder_status()  { check_connection; remote "sudo systemctl status ct-recorder --no-pager"; }
+
+# ===========================================================================
 # Overview
 # ===========================================================================
 
@@ -369,9 +479,18 @@ cmd_status_all() {
     local hub_status
     hub_status=$(remote "sudo systemctl is-active ct-hub 2>/dev/null || echo 'inactive'")
     if [[ "$hub_status" == "active" ]]; then
-        echo -e "  Hub       ${GREEN}●${NC} running"
+        echo -e "  Hub        ${GREEN}●${NC} running"
     else
-        echo -e "  Hub       ${RED}●${NC} $hub_status"
+        echo -e "  Hub        ${RED}●${NC} $hub_status"
+    fi
+
+    # Recorder
+    local rec_status
+    rec_status=$(remote "sudo systemctl is-active ct-recorder 2>/dev/null || echo 'inactive'")
+    if [[ "$rec_status" == "active" ]]; then
+        echo -e "  Recorder   ${GREEN}●${NC} running"
+    else
+        echo -e "  Recorder   ${RED}●${NC} $rec_status"
     fi
 
     echo ""
@@ -411,6 +530,7 @@ cmd_help() {
     echo "Targets:"
     echo "  01–10       Slot number (two digits)"
     echo "  hub         Hub dashboard"
+    echo "  recorder    Tick recorder service"
     echo "  status      Overview of all slots"
     echo ""
     echo "Slot commands:"
@@ -432,6 +552,15 @@ cmd_help() {
     echo "  --restart   Restart hub"
     echo "  --logs      Tail hub logs"
     echo "  --status    Show hub status"
+    echo ""
+    echo "Recorder commands:"
+    echo "  (default)   Full deploy (stop → sync → deps → start)"
+    echo "  --setup     First-time setup (dir, venv, service install)"
+    echo "  --stop      Stop the recorder"
+    echo "  --start     Start the recorder"
+    echo "  --restart   Restart the recorder"
+    echo "  --logs      Tail live logs"
+    echo "  --status    Show service status"
 }
 
 # ===========================================================================
@@ -458,6 +587,18 @@ case "$TARGET" in
             --logs)     cmd_hub_logs ;;
             --status)   cmd_hub_status ;;
             *)          fail "Unknown hub command: $COMMAND" ;;
+        esac
+        ;;
+    recorder)
+        case "$COMMAND" in
+            "")         cmd_recorder_deploy ;;
+            --setup)    cmd_recorder_setup ;;
+            --stop)     cmd_recorder_stop ;;
+            --start)    cmd_recorder_start ;;
+            --restart)  cmd_recorder_restart ;;
+            --logs)     cmd_recorder_logs ;;
+            --status)   cmd_recorder_status ;;
+            *)          fail "Unknown recorder command: $COMMAND" ;;
         esac
         ;;
     *)

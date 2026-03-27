@@ -13,7 +13,7 @@
 | `straddle_strangle.py` | Strategy + param grid + backtest loop in one file | **Extract** — strategy logic reusable, loop/grid must decouple |
 | `pricing.py` | BS model, vol estimation, Deribit fees | **Reuse** fee model; BS pricing becomes optional (validation) |
 | `metrics.py` | Stats, equity curves, Sortino/Calmar/scoring | **Reuse as-is** — already strategy-agnostic |
-| `reporting.py` | Console + HTML report generation | **Reuse as-is** — decoupled from data source |
+| `reporting.py` | Console + HTML report generation | **Moved to archive** — `reporting_v2.py` built instead (no V1 coupling) |
 | `data.py` | Binance hourly candles | **Replace** — swapped out entirely |
 | `HistoricOptionChain` | Fast parquet-backed lookup (~40µs/option) | **Build on** — core data access layer |
 | Tardis parquet data | 15 days (Mar 9–23, 2026), ~600–750 MB/day, 13 GB total | **Primary data source** |
@@ -112,7 +112,7 @@ Most strategies only use 1–2 expiries (0DTE straddle uses nearest 0DTE; put-se
 #### Pre-computation cost
 
 Run once per new data day (~60–90s per day via `HistoricOptionChain`). Store results per strategy scope:
-- `snapshots_all_20260309_20260323.parquet` (all expiries; filtered to strategy scope at load time)
+- `options_20260309_20260323.parquet` (all expiries; filtered to strategy scope at load time)
 - `spot_track_20260309_20260323.parquet` (shared spot OHLC)
 
 ### 2.3 Alternative Considered: Day-at-a-Time Streaming
@@ -147,11 +147,11 @@ Strategy code (sees: current time, spot OHLC, option chain snapshot)
 #### Layer 1 → Layer 2: One-time snapshot build (runs rarely)
 
 - **Trigger:** Only when new raw tick data arrives from Tardis (e.g., you download a new week of data).
-- **What it does:** Reads raw tick parquets one day at a time via `HistoricOptionChain`, samples at 5-min intervals, writes compressed parquet files to `backtester/data/`.
+- **What it does:** Reads raw tick parquets one day at a time via `HistoricOptionChain`, samples at 5-min intervals, writes compressed parquet files to `backtester2/snapshots/`.
 - **Format:** Parquet with zstd compression. No database — plain files. Parquet gives us columnar reads, type safety, and instant schema inspection.
 - **Output files:**
   - `spot_track_YYYYMMDD_YYYYMMDD.parquet` — shared, built once for all strategies
-  - `snapshots_all_YYYYMMDD_YYYYMMDD.parquet` — full option chain (all expiries)
+  - `options_YYYYMMDD_YYYYMMDD.parquet` — full option chain (all expiries)
 - **Idempotent:** If the snapshot already covers a date range, it's skipped. Adding new data days appends.
 
 #### Layer 2 → Layer 3: Strategy-scoped runtime load (runs every backtest)
@@ -172,24 +172,22 @@ The spot track is built once and shared by all strategies. Option data is filter
 ## 3. Module Architecture
 
 ```
-analysis/backtester/
-├── backtest.py              # V1 orchestrator (keep for reference/comparison)
+backtester2/
 ├── run.py                   # V2 entry point / CLI
 ├── snapshot_builder.py      # Layer 1→2: tick parquet → 5-min snapshots + 1-min spot track
 ├── market_replay.py         # Core: iterates snapshots, provides MarketState + spot track
-├── engine.py                # Orchestrator: loops strategies × parameter grids
+├── engine.py                # Orchestrator: run_grid() + run_grid_full()
 ├── strategy_base.py         # Strategy protocol + Trade/OpenPosition + condition helpers
+│                            #   incl. close_trade() helper, at_interval() condition
 ├── strategies/
 │   ├── __init__.py
-│   ├── straddle_strangle.py # Long straddle/strangle + index extrusion exit
+│   ├── straddle_strangle.py # Long straddle/strangle + index move exit
 │   └── daily_put_sell.py   # Short OTM put, SL or expiry exit
-├── pricing.py               # Existing: BS model, vol estimation, Deribit fees (used in both modes)
-├── metrics.py               # Existing (stats, equity, scoring — untouched)
-├── reporting.py             # Existing (console + HTML — untouched)
-├── data.py                  # Existing V1 data source (keep for reference)
-└── data/                    # Generated snapshot artifacts (gitignored)
+├── pricing.py               # Existing: BS model, vol estimation, Deribit fees
+├── reporting_v2.py          # Strategy-agnostic HTML reports, no V1 coupling
+└── snapshots/               # Generated snapshot artifacts (gitignored)
     ├── spot_track_20260309_20260323.parquet
-    └── snapshots_all_20260309_20260323.parquet
+    └── options_20260309_20260323.parquet
 ```
 
 ### 3.1 Module Responsibilities
@@ -197,8 +195,8 @@ analysis/backtester/
 #### `snapshot_builder.py` — Build 5-Min Snapshots + Spot Track (one-time)
 
 **Input:** Directory of raw tick parquet files  
-**Output:** Two parquet files in `backtester/data/`:
-- `snapshots_all_YYYYMMDD_YYYYMMDD.parquet` — all expiries, 5-min resolution
+**Output:** Two parquet files in `backtester2/snapshots/`:
+- `options_YYYYMMDD_YYYYMMDD.parquet` — all expiries, 5-min resolution
 - `spot_track_YYYYMMDD_YYYYMMDD.parquet` — 1-min OHLC, shared
 
 **When to run:** Only when new raw tick data arrives from Tardis. Not part of the backtest loop.
@@ -239,9 +237,8 @@ class OptionQuote:
     mark: float
     mark_iv: float
     delta: float
-    bid_usd: float      # Convenience: bid × spot
-    ask_usd: float
-    mark_usd: float
+    # bid_usd / ask_usd / mark_usd — computed @property (bid/ask/mark × spot)
+    # Not stored fields — calculated on access to save memory
 
 @dataclass
 class SpotBar:
@@ -513,24 +510,29 @@ class ExtrusionStraddleStrangle:
     name = "extrusion_straddle_strangle"
 
     # ── Grid parameters ──
+    # Full grid: 7 offsets × 10 triggers × 12 holds × 6 hours = 5,040 combos.
+    # The PARAM_GRID below is a scoped subset; adjust values to taste.
+    # entry_hour is a GRID DIMENSION (not a filter): each combo tries one
+    # specific hour, weekdays only, one trade per day.
     PARAM_GRID = {
         "offset":        [0, 500, 1000, 1500, 2000, 2500, 3000],
         "index_trigger": [300, 400, 500, 600, 700, 800, 1000, 1200, 1500, 2000],
         "max_hold":      [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "entry_hour":    [3, 6, 9, 12, 15, 19],   # ← grid dim (not a filter)
     }
 
     def configure(self, params):
         self.offset = params["offset"]
         self.trigger = params["index_trigger"]
         self.max_hold = params["max_hold"]
-        self.max_entry_hour = params.get("max_entry_hour", 20)
+        self.entry_hour = params.get("entry_hour", 9)   # fixed UTC hour
         self.pricing_mode = params.get("pricing_mode", "real")
         self._position = None
 
         # Compose conditions from params
         self._entry_conditions = [
             weekday_only(),
-            time_window(0, self.max_entry_hour + 1),
+            time_window(self.entry_hour, self.entry_hour + 1),  # 1-hour window
         ]
         self._exit_conditions = [
             index_move_trigger(self.trigger),
@@ -538,7 +540,7 @@ class ExtrusionStraddleStrangle:
         ]
 
     def _open(self, state):
-        expiry = _nearest_0dte_expiry(state)
+        expiry = _nearest_valid_expiry(state)  # 0DTE before 08:00, ~1DTE after
         call, put = state.get_strangle(expiry, self.offset)  # offset=0 → straddle
         # Price at ask (buying), convert BTC→USD
         entry_usd = (call.ask_usd + put.ask_usd)
@@ -558,16 +560,8 @@ class ExtrusionStraddleStrangle:
         fees_close = ...
         pnl = exit_usd - self._position.entry_price_usd \
               - self._position.fees_open - fees_close
-        trade = Trade(
-            entry_time=self._position.entry_time, exit_time=state.dt,
-            entry_spot=self._position.entry_spot, exit_spot=state.spot,
-            entry_price_usd=self._position.entry_price_usd,
-            exit_price_usd=exit_usd, fees=self._position.fees_open + fees_close,
-            pnl=pnl, triggered=(reason == "trigger"), exit_reason=reason,
-            exit_hour=int((state.dt - self._position.entry_time).total_seconds() / 3600),
-            entry_date=self._position.entry_time.strftime("%Y-%m-%d"),
-            metadata={**self._position.metadata, "trigger": self.trigger},
-        )
+        # close_trade() helper from strategy_base handles PnL formula + Trade creation
+        trade = close_trade(state, self._position, reason, exit_usd, fees_close)
         self._position = None
         return trade
 ```
@@ -813,7 +807,7 @@ Steps:
 │                  snapshot_builder.py                                   │
 │                  ┌───────┴────────┐                                   │
 │                  ▼                ▼                                   │
-│  spot_track.parquet    snapshots_all.parquet                        │
+│  spot_track.parquet    options_all.parquet                        │
 │  (1-min OHLC, 420 KB)  (5-min, all expiries, ~35 MB)               │
 │  [shared]               [single file, filtered at load time]        │
 │                                                                       │
@@ -822,7 +816,7 @@ Steps:
 ┌──────────────────────── BACKTEST RUN ─────────────────────────────────┐
 │                                                                       │
 │  spot_track.parquet         ───────┐                                   │
-│  snapshots_all.parquet ───────────▼                                   │
+│  options_all.parquet ───────────▼                                   │
 │                        MarketReplay                                │
 │                    (filters to strategy expiries)                   │
 │                               │                                       │
@@ -849,7 +843,7 @@ Steps:
 
 ### 5.1 Snapshot Parquet Schemas
 
-**Option snapshot** (`snapshots_all_YYYYMMDD_YYYYMMDD.parquet`):
+**Option snapshot** (`options_YYYYMMDD_YYYYMMDD.parquet`):
 ```
 timestamp:        int64     (µs, floored to 5-min boundary)
 expiry:           category  (e.g. "9MAR26")
@@ -916,7 +910,7 @@ param_grid = {
 # Entry hour is implicit: strategy enters at valid hours within market data
 ```
 
-**Note on V1 vs V2 entry_hour handling:** In V1, entry_hour is a grid parameter because the strategy only checks one specific hour per combo. In V2, the strategy runs every minute and checks entry conditions naturally — `max_entry_hour` acts as a filter, not a grid dimension. This reduces combos from 17,640 to 840, with each combo seeing all valid entry opportunities automatically.
+**Note on entry_hour in V2:** `entry_hour` IS a grid dimension — each combo specifies one fixed UTC entry hour. This gives fine-grained control over which time of day the strategy enters, which proved important for the index-move strategy where entry timing significantly affects results. Full grid: 7 offsets × 10 triggers × 12 holds × 6 hours = 5,040 combos.
 
 ---
 
@@ -933,8 +927,8 @@ param_grid = {
 | **Pricing** | Dual: real bid/ask (default) + BS mode | Real = ground truth; BS = fallback + model comparison |
 | **Fee model** | Reuse `pricing.deribit_fee_per_leg()` | Already validated against production |
 | **Grid execution** | Single-pass multi-combo | Market data scanned once; combos evaluated in parallel |
-| **Metrics** | Reuse `metrics.py` unchanged | Already strategy-agnostic |
-| **Reporting** | Reuse `reporting.py` unchanged | Already decoupled from data source |
+| **Metrics** | Inline in `reporting_v2.py` (`combo_stats`, `equity_metrics`) | V1 `metrics.py` moved to archive |
+| **Reporting** | `reporting_v2.py` (built from scratch) | No V1 coupling; auto-discovers params |
 | **Entry-hour handling** | Filter, not grid dimension | Reduces combos 21×; strategy sees all entry windows naturally |
 | **400-day scaling** | Strategy-scoped <400 MB; spot <11 MB | Fits M1 16 GB RAM with room to spare |
 
@@ -979,23 +973,24 @@ param_grid = {
 - Port extrusion straddle/strangle from V1 (`strategies/straddle_strangle.py`)
 - Port simplified daily put sell (`strategies/daily_put_sell.py`)
 - Implement dual pricing: real bid/ask (default) + BS mode
-- Handle expiry selection (0DTE for straddle, 1DTE for put sell)
+- Handle expiry selection: `_nearest_valid_expiry()` (handles 0DTE before 08:00, ~1DTE after — correct for all entry hours)
 - Validate: run single combo of each strategy, verify PnL arithmetic
 - **NaN bug found & fixed:** illiquid strikes with NaN bid in raw data; added NaN guards
+- **`close_trade()` helper added to `strategy_base`:** encapsulates PnL formula + Trade construction for both long and short legs; imported by both strategies
 
 ### Phase 4: Engine + Grid (engine.py) ✅
-- Implement `run_grid()` with single-pass multi-combo evaluation
+- Implement `run_grid()` with single-pass multi-combo evaluation (returns V1-compatible tuples)
 - `run_grid_full()` returns full Trade objects for reporting
 - Validate: full grid produces same structure as V1 `results` dict
-- **Result:** 840 combos × 4,310 states = 50,025 trades in ~20s
 
 ### Phase 5: Integration + Reports (run.py + reporting_v2.py) ✅
-- Clean CLI (`run.py`, ~115 lines) — no V1 coupling, no shims
-- Strategy-agnostic HTML reports (`reporting_v2.py`) — auto-discovers params
+- Clean CLI (`run.py`, ~115 lines) — no V1 coupling, no shims; uses `run_grid_full`
+- **`reporting_v2.py` built from scratch** (not V1 reuse) — strategy-agnostic, works directly with `Dict[Tuple, List[Trade]]`, auto-discovers parameter names
 - Report sections: best combo + sparkline, top 20, heatmaps for all 2D param pairs, daily equity, trade log
 - Both strategies tested end-to-end:
   - Straddle: 840 combos, 50,025 trades, 20.9s → HTML report
   - Put sell: 20 combos, 160 trades, 5.4s → HTML report
+- **`entry_hour` added to straddle grid:** full grid = 5,040 combos; `PARAM_GRID` in code is a prunable subset scoped to current analysis window
 
 ### Phase 6: Performance Profiling ⬜
 - Profile the hot loop (identify bottlenecks)

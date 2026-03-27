@@ -33,6 +33,18 @@
     <label>Open Orders</label>
     <value>{{ total_orders }}</value>
   </div>
+  <div class="summary-item">
+    <label>Exchanges</label>
+    <value>
+      <span class="exch-light {{ 'exch-up' if exchange_health.coincall else 'exch-down' }}"
+            title="Coincall — {{ 'online' if exchange_health.coincall else 'unreachable' }}">●</span>
+      <span class="exch-label">CC</span>
+      &nbsp;
+      <span class="exch-light {{ 'exch-up' if exchange_health.deribit else 'exch-down' }}"
+            title="Deribit — {{ 'online' if exchange_health.deribit else 'unreachable' }}">●</span>
+      <span class="exch-label">DB</span>
+    </value>
+  </div>
 </div>
 
 <!-- ── Slot Cards ────────────────────────────────────────────────── -->

@@ -1,19 +1,48 @@
 #!/usr/bin/env python3
 """
-straddle_strangle.py — Long straddle/strangle + index extrusion exit.
+straddle_strangle.py — Long straddle/strangle + index move exit.
 
-Maps to production's atm_straddle_index_move strategy. Buys an ATM straddle
-(offset=0) or OTM strangle (offset>0) and exits when BTC spot moves by a
-configurable trigger distance, or after max_hold hours.
+Buys an ATM straddle (offset=0) or OTM strangle (offset>0) on the nearest
+unexpired Deribit expiry, and exits when BTC spot moves by a configurable
+trigger distance from the entry spot, or after max_hold hours.
 
-Grid parameters:
-    offset        [0, 500, 1000, ...]   — distance from ATM for strangle legs
-    index_trigger [300, 400, 500, ...]  — BTC move in USD to trigger exit
-    max_hold      [1, 2, 3, ..., 12]    — max hours before forced close
+Expiry selection:
+    _nearest_valid_expiry() picks the closest expiry whose 08:00 UTC
+    deadline hasn't passed yet. Before 08:00 this is today (0DTE); after
+    08:00 it is tomorrow (~1DTE). This means the strategy works correctly
+    for all entry hours in the grid (3, 6, 9, 12, 15, 19 UTC).
+
+One trade per day:
+    _last_trade_date prevents re-entry on the same calendar day after a
+    trade closes. The date is stamped from entry_time (not exit_time) so
+    overnight holds don't reset the guard on the next day.
+
+Grid parameters (5,040 combos):
+    offset        [0, 500, 1000, 1500, 2000, 2500, 3000]  — USD distance
+                  from ATM for the strangle legs (0 = ATM straddle)
+    index_trigger [300, 400, 500, 600, 700, 800, 1000,
+                  1200, 1500, 2000]  — BTC move in USD to trigger exit;
+                  checked against both the 5-min close and every 1-min
+                  bar high/low inside the window (no spike is missed)
+    max_hold      [1..12]   — max hours before forced time-out close
+    entry_hour    [3, 6, 9, 12, 15, 19]  — UTC hour at which entry is
+                  attempted (one-hour window, weekdays only)
+
+Trigger detection:
+    index_move_trigger() checks abs(spot - entry_spot) >= trigger on
+    the 5-min close, then checks every 1-min bar high and low inside
+    that 5-min window. This ensures intra-bar spikes are not missed.
 
 Pricing modes:
-    "real"  — buy at ask, sell at bid (conservative, default)
-    "bs"    — Black-Scholes with snapshot IV (for model comparison)
+    "real"  — open at ask, close at bid (conservative, default)
+    "bs"    — Black-Scholes mid using snapshot mark_iv (model comparison)
+              mark_iv is stored as a percentage (e.g. 39.8) and divided
+              by 100 before passing to bs_call / bs_put.
+
+Fees:
+    Deribit model: MIN(0.03% × index, 12.5% × option_price) per leg.
+    At typical BTC prices the index cap (= 0.0003 BTC/leg) usually binds
+    for options priced above ~0.0024 BTC.
 """
 import re
 from datetime import datetime
@@ -57,24 +86,43 @@ def _is_0dte(expiry_code, current_dt):
     return exp_date.date() == current_dt.date()
 
 
-def _nearest_0dte_expiry(state):
+def _nearest_valid_expiry(state):
     # type: (Any) -> Optional[str]
-    """Find the 0DTE expiry for the current day."""
+    """Find the nearest expiry that hasn't expired yet.
+
+    Deribit options expire at 08:00 UTC on the expiry date.
+    Before 08:00: today's expiry is used (0DTE).
+    After  08:00: today's expiry is gone, so tomorrow's expiry is used (~1DTE).
+    """
+    best = None
+    best_dt = None
     for exp in state.expiries():
-        if _is_0dte(exp, state.dt):
-            return exp
-    return None
+        exp_date = _parse_expiry_date(exp)
+        if exp_date is None:
+            continue
+        exp_dt = exp_date.replace(hour=EXPIRY_HOUR_UTC, tzinfo=state.dt.tzinfo)
+        if exp_dt <= state.dt:
+            continue  # already expired
+        if best_dt is None or exp_dt < best_dt:
+            best = exp
+            best_dt = exp_dt
+    return best
 
 
 class ExtrusionStraddleStrangle:
-    """Buy 0DTE ATM straddle or OTM strangle, exit on BTC index move."""
+    """Long straddle/strangle on the nearest unexpired Deribit expiry.
+
+    One trade per day, entered at a fixed UTC hour, exited on an index
+    move trigger or max-hold timeout. See module docstring for full details.
+    """
 
     name = "extrusion_straddle_strangle"
 
     PARAM_GRID = {
-        "offset": [0, 500, 1000, 1500, 2000, 2500, 3000],
-        "index_trigger": [300, 400, 500, 600, 700, 800, 1000, 1200, 1500, 2000],
-        "max_hold": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        "offset": [0, 500, 1000, 1500, 2000],
+        "index_trigger": [500, 1000, 1500, 2000],
+        "max_hold": [1, 2, 3, 4, 5, 6, 7, 8],
+        "entry_hour": [11, 12, 13, 14, 15],
     }
 
     def __init__(self):
@@ -82,8 +130,9 @@ class ExtrusionStraddleStrangle:
         self._offset = 0
         self._trigger = 500
         self._max_hold = 4
-        self._max_entry_hour = 20
+        self._entry_hour = 9
         self._pricing_mode = "real"
+        self._last_trade_date = None  # type: Optional[Any]
         self._entry_conditions = []
         self._exit_conditions = []
 
@@ -92,13 +141,14 @@ class ExtrusionStraddleStrangle:
         self._offset = params["offset"]
         self._trigger = params["index_trigger"]
         self._max_hold = params["max_hold"]
-        self._max_entry_hour = params.get("max_entry_hour", 20)
+        self._entry_hour = params.get("entry_hour", 9)
         self._pricing_mode = params.get("pricing_mode", "real")
         self._position = None
+        self._last_trade_date = None
 
         self._entry_conditions = [
             weekday_only(),
-            time_window(0, self._max_entry_hour + 1),
+            time_window(self._entry_hour, self._entry_hour + 1),
         ]
         self._exit_conditions = [
             index_move_trigger(self._trigger),
@@ -121,10 +171,12 @@ class ExtrusionStraddleStrangle:
             if reason:
                 trades.append(self._close(state, reason))
 
-        # Check entry if flat
+        # Check entry if flat and no trade taken today
         if self._position is None:
-            if all(cond(state) for cond in self._entry_conditions):
-                self._try_open(state)
+            today = state.dt.date()
+            if self._last_trade_date != today:
+                if all(cond(state) for cond in self._entry_conditions):
+                    self._try_open(state)
 
         return trades
 
@@ -137,6 +189,7 @@ class ExtrusionStraddleStrangle:
     def reset(self):
         # type: () -> None
         self._position = None
+        self._last_trade_date = None
 
     def describe_params(self):
         # type: () -> Dict[str, Any]
@@ -144,6 +197,7 @@ class ExtrusionStraddleStrangle:
             "offset": self._offset,
             "index_trigger": self._trigger,
             "max_hold": self._max_hold,
+            "entry_hour": self._entry_hour,
         }
 
     def _check_expiry(self, state):
@@ -164,12 +218,8 @@ class ExtrusionStraddleStrangle:
     def _try_open(self, state):
         # type: (Any) -> None
         """Try to open a straddle/strangle position."""
-        expiry = _nearest_0dte_expiry(state)
+        expiry = _nearest_valid_expiry(state)
         if expiry is None:
-            return
-
-        # Must be before expiry hour on expiry day
-        if state.dt.hour >= EXPIRY_HOUR_UTC and _is_0dte(expiry, state.dt):
             return
 
         if self._offset == 0:
@@ -275,5 +325,6 @@ class ExtrusionStraddleStrangle:
         trade = close_trade(state, pos, reason, exit_usd, fees_close)
         trade.metadata["index_trigger"] = self._trigger
         trade.metadata["max_hold"] = self._max_hold
+        self._last_trade_date = pos.entry_time.date()
         self._position = None
         return trade

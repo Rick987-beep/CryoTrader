@@ -170,6 +170,28 @@
     .badge-warn {
       background: #d2992233; color: #d29922; border: 1px solid #d29922;
     }
+    /* ── Recorder card ───────────────────────────────────────────────── */
+    .recorder-card {
+      background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+      padding: 0.55rem 1rem; margin-bottom: 1rem;
+    }
+
+    /* ── Exchange health lights ──────────────────────────────────────── */
+    .exch-light { font-size: 0.7rem; }
+    .exch-up    { color: #3fb950; }
+    .exch-down  { color: #f85149; }
+    .exch-label { font-size: 0.72rem; color: #8b949e; }
+    .recorder-card.recorder-offline { opacity: 0.6; }
+    .recorder-header {
+      display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem;
+    }
+    .recorder-title { font-weight: 600; font-size: 0.85rem; color: #c9d1d9; }
+    .recorder-metrics { display: flex; gap: 1.5rem; flex-wrap: wrap; }
+    .recorder-metrics .metric label {
+      display: block; font-size: 0.65rem; color: #8b949e; text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .recorder-metrics .metric value { font-size: 0.82rem; color: #c9d1d9; }
 
     /* ── Tabbed log viewer ──────────────────────────────────────────── */
     .log-viewer {
@@ -210,6 +232,12 @@
   <div id="overview"
        hx-get="/api/overview" hx-trigger="load, every 5s" hx-swap="innerHTML">
     <p class="muted">Loading...</p>
+  </div>
+
+  <!-- ── Tick Recorder card ───────────────────────────────────────── -->
+  <div id="recorder-section"
+       hx-get="/api/recorder" hx-trigger="load, every 10s" hx-swap="innerHTML">
+    <p class="muted">Loading recorder...</p>
   </div>
 
   <!-- ── Tabbed Log Viewer ───────────────────────────────────────── -->

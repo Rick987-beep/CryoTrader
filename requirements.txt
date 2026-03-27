@@ -7,8 +7,11 @@ python-dotenv>=1.0.0      # Environment variable management
 flask>=3.0.0              # Web dashboard
 tomli>=2.0.0              # TOML parser (Python <3.11 fallback for tomllib)
 
-# Optional - for WebSocket support (future)
-websockets>=12.0          # WebSocket client
+websockets>=12.0          # WebSocket client (tick recorder)
+numpy>=1.24               # Tick recorder — array ops in snapshotter
+pandas>=2.0               # Tick recorder — DataFrame / parquet writes
+pyarrow>=14.0             # Tick recorder — parquet backend
+python-dotenv>=1.0        # Tick recorder — load .env in recorder.py
 
 # Development dependencies (optional)
 # pytest>=7.0.0           # Testing framework

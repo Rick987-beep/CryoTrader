@@ -106,7 +106,7 @@ def build_context(
     rfq_executor = components['rfq_executor']
     account_mgr = components['account_manager']
     state_map = components['state_map']
-    monitor = PositionMonitor(account_manager=account_mgr, poll_interval=poll_interval)
+    monitor = PositionMonitor(account_manager=account_mgr, poll_interval=poll_interval, auth=auth)
     lifecycle_mgr = LifecycleEngine(
         rfq_notional_threshold=rfq_notional_threshold,
         account_manager=account_mgr,
@@ -619,6 +619,16 @@ class StrategyRunner:
         # Always process trade open/close events, even when entry is paused
         self._check_opened_trades(account)
         self._check_closed_trades(account)
+
+        if not self._enabled:
+            return
+
+        # Skip new entries when exchange is unreachable (exits still managed
+        # by LifecycleEngine on its own tick, which also runs from callbacks).
+        if hasattr(self.ctx, 'auth') and hasattr(self.ctx.auth, 'reachable'):
+            if not self.ctx.auth.reachable:
+                logger.debug(f"[{self._strategy_id}] exchange unreachable — skipping entry")
+                return
 
         if not self._enabled:
             return

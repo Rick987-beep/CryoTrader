@@ -34,14 +34,38 @@ Strategy.on_market_state()  →  List[Trade]  →  reporting_v2.py  →  HTML
 
 | Strategy | Class | Combos | Description |
 |---|---|---|---|
-| `straddle` | `ExtrusionStraddleStrangle` | 840 | Buy 0DTE ATM straddle/OTM strangle, exit on BTC index move |
+| `straddle` | `ExtrusionStraddleStrangle` | 5,040 | Buy nearest-expiry ATM straddle/OTM strangle, exit on BTC index move |
 | `put_sell` | `DailyPutSell` | 20 | Sell 1DTE OTM put, exit on stop-loss or expiry |
+
+## Key Design Notes
+
+### Option prices and IV
+- All option prices in the snapshots are **BTC-denominated** (e.g. `0.0068 BTC`). Converted to USD via `price × spot`.
+- `mark_iv` is stored as a **percentage** (e.g. `39.8` = 39.8% IV). Divide by 100 before passing to `bs_call`/`bs_put`. Both strategies do this correctly.
+
+### Expiry selection (`straddle_strangle`)
+- `_nearest_valid_expiry()` picks the closest expiry whose 08:00 UTC deadline hasn't passed yet.
+- Before 08:00 UTC: today's expiry is used (0DTE). After 08:00 UTC: tomorrow's expiry is used (~1DTE).
+- This is essential for afternoon/evening entry hours (12, 15, 19 UTC) — a naive "today's expiry" approach would block all post-08:00 entries.
+
+### Trigger detection
+- `index_move_trigger()` in `strategy_base.py` checks two things per 5-min tick:
+  1. The 5-min close spot vs entry spot.
+  2. Every 1-min bar high and low inside that 5-min window.
+- This ensures intra-bar price spikes are never missed, even if price reverses before the next snapshot.
+
+### One trade per day
+- `straddle_strangle` tracks `_last_trade_date` (stamped from `entry_time`) to prevent re-entry on the same calendar day. `reset()` clears it between grid combos.
+
+### Fees
+- Deribit model: `MIN(0.03% × index, 12.5% × option_price)` per leg per trade side.
+- At typical BTC prices (~$65k–$85k) the index cap = **0.0003 BTC/leg** and usually binds for options priced above ~0.0024 BTC.
 
 ## Quick Start
 
 ### 1. Build snapshots (one-time, ~2 min)
 
-Requires raw Tardis parquets in `analysis/tardis_options/data/`.
+Requires raw Tardis parquets in `backtester2/tardis_options/`.
 
 ```bash
 python -m backtester2.snapshot_builder
@@ -52,10 +76,10 @@ Output: `backtester2/snapshots/options_*.parquet` + `spot_track_*.parquet`
 ### 2. Run a backtest
 
 ```bash
-# Straddle (840 combos, ~20s)
+# Straddle/strangle grid (5,040 combos)
 python -m backtester2.run --strategy straddle
 
-# Put sell (20 combos, ~5s)
+# Put sell (20 combos)
 python -m backtester2.run --strategy put_sell
 
 # Custom output path
@@ -77,7 +101,7 @@ Open the generated HTML file in a browser. Sections include:
    - `configure(params)` — set parameters
    - `on_market_state(state) → List[Trade]` — process each 5-min tick
    - `on_end(state) → List[Trade]` — force-close at end of data
-   - `reset()` — clear state between grid runs
+   - `reset()` — clear state between grid runs (including any per-day counters)
    - `describe_params() → dict`
    - Class attributes: `name: str`, `PARAM_GRID: dict`
 
@@ -89,21 +113,14 @@ Open the generated HTML file in a browser. Sections include:
 
 3. Run: `python -m backtester2.run --strategy my_strat`
 
-## Data Format
-
-- **Option prices:** BTC-denominated (0.0001–4.13 range), converted to USD via `price × spot`
-- **Entry pricing:** Buy at ask, sell at bid (worst fill — conservative)
-- **Fees:** Deribit model: `MIN(0.03% × index, 12.5% × option_price)` per leg
-- **Spot data:** 0 NaN, 0 zero values across all timestamps
-
 ## Performance
 
 On M1 Mac (15 days of data, 4,310 intervals):
 
-| Strategy | Combos | Trades | Time |
-|---|---|---|---|
-| Straddle | 840 | 50,025 | ~21s |
-| Put Sell | 20 | 160 | ~5s |
+| Strategy | Combos | Time |
+|---|---|---|
+| Straddle/strangle | 5,040 | ~2 min |
+| Put sell | 20 | ~5s |
 
 ## Requirements
 

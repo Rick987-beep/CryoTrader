@@ -45,6 +45,7 @@ logging.basicConfig(
 HUB_PASSWORD = os.getenv("HUB_PASSWORD", "").strip()
 HUB_PORT = int(os.getenv("HUB_PORT", "8080"))
 SLOTS_BASE = Path(os.getenv("HUB_SLOTS_BASE", "/opt/ct"))
+RECORDER_HEALTH_PORT = int(os.getenv("RECORDER_HEALTH_PORT", "8090"))
 
 # Slot port mapping: slot-01 → 8081, slot-02 → 8082, etc.
 SLOT_PORT_BASE = 8080
@@ -148,6 +149,28 @@ def query_slot_control(port: int, endpoint: str, method: str = "GET",
         return None
 
 
+# Exchange probe URLs — public endpoints, no auth required
+_EXCHANGE_PROBES = {
+    "coincall": "https://api.coincall.com/open/futures/ticker/BTCUSDT",
+    "deribit":  "https://www.deribit.com/api/v2/public/get_time",
+}
+
+
+def probe_exchange(name: str) -> bool:
+    """
+    Lightweight reachability probe for a named exchange.
+    Returns True if the exchange responds with HTTP 200 within 3 seconds.
+    """
+    url = _EXCHANGE_PROBES.get(name)
+    if not url:
+        return False
+    try:
+        resp = http_requests.get(url, timeout=3.0)
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
 # =============================================================================
 # Flask App
 # =============================================================================
@@ -245,7 +268,24 @@ def api_overview():
         }
         slot_data.append(slot_info)
 
-    return render_template("_hub_overview.html", slots=slot_data)
+    exchange_health = {
+        "coincall": probe_exchange("coincall"),
+        "deribit":  probe_exchange("deribit"),
+    }
+
+    return render_template("_hub_overview.html", slots=slot_data, exchange_health=exchange_health)
+
+
+@app.route("/api/recorder")
+@login_required
+def api_recorder():
+    """Compact health card for the tick recorder service."""
+    data = query_slot_control(RECORDER_HEALTH_PORT, "/health", timeout=2.0)
+    now = time.time()
+    interval = 300  # 5-min boundaries
+    next_boundary = ((int(now) // interval) + 1) * interval
+    next_snapshot_at = datetime.fromtimestamp(next_boundary, tz=timezone.utc).strftime("%H:%M UTC")
+    return render_template("_hub_recorder.html", r=data, next_snapshot_at=next_snapshot_at)
 
 
 @app.route("/api/slot/<slot_id>/detail")

@@ -1,0 +1,65 @@
+# ===========================================================================
+# CoincallTrader — rsync Exclusions for Recorder Deployment
+#
+# Used by deploy-slot.sh when syncing to /opt/ct/recorder/.
+# Unlike slot deployments, backtester2/ IS included (tickrecorder lives there).
+# Large data directories and dev-only folders are excluded.
+# ===========================================================================
+
+# ── Python artifacts ────────────────────────────────────────────────────
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# ── Git ─────────────────────────────────────────────────────────────────
+.git/
+.gitignore
+
+# ── Local deploy configs ────────────────────────────────────────────────
+.deploy.slots.env
+.env.slot-*
+.env.hub
+.env.recorder
+accounts.toml
+slot_config.py
+slots/
+
+# ── Runtime data (preserved on VPS across deploys) ─────────────────────
+data/
+logs/
+
+# ── Large backtester2 data dirs (not used by recorder at runtime) ───────
+# backtester2/tickrecorder/data/ = default local RECORDER_DATA_DIR (config.py fallback)
+# backtester2/snapshots/        = merge.py default output dir
+backtester2/snapshots/
+backtester2/data/
+backtester2/tickrecorder/data/
+backtester2/tickrecorder/merged/
+backtester2/tardis_options/
+
+# ── Data file catch-all (never sync collected tick data, regardless of location) ──
+*.parquet
+*.parquet.bak
+*.parquet.tmp
+
+# ── Directories not needed by recorder ─────────────────────────────────
+hub/
+archive/
+analysis/
+docs/
+tests/
+deployment/
+
+# ── OS junk ─────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# ── IDE ─────────────────────────────────────────────────────────────────
+.vscode/
+.idea/

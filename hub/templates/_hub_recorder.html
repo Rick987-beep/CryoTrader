@@ -1,0 +1,56 @@
+{% if r %}
+<div class="recorder-card{% if not r.ws_connected %} recorder-offline{% endif %}">
+  <div class="recorder-header">
+    <span class="recorder-title">Tick Recorder</span>
+    {% if r.ws_connected %}
+      <span class="badge badge-online">Online</span>
+    {% else %}
+      <span class="badge badge-offline">{{ r.status | title }}</span>
+    {% endif %}
+    {% if r.disk_free_mb is not none and r.disk_free_mb < 500 %}
+      <span class="badge badge-warn">Disk {{ r.disk_free_mb }}MB</span>
+    {% endif %}
+    {% if r.gaps_today > 0 %}
+      <span class="badge badge-warn">{{ r.gaps_today }} gap{{ 's' if r.gaps_today != 1 }}</span>
+    {% endif %}
+  </div>
+  <div class="recorder-metrics">
+    <div class="metric">
+      <label>Snapshots Today</label>
+      <value>{{ r.snapshots_today }}</value>
+    </div>
+    <div class="metric">
+      <label>Instruments</label>
+      <value>{{ r.instruments_tracked }}</value>
+    </div>
+    <div class="metric">
+      <label>Last Snapshot</label>
+      <value>{{ r.last_snapshot_ts[11:16] if r.last_snapshot_ts else '—' }}</value>
+    </div>
+    <div class="metric">
+      <label>Next Snapshot</label>
+      <value>{{ next_snapshot_at }}</value>
+    </div>
+    <div class="metric">
+      <label>Reconnects</label>
+      <value>{{ r.ws_reconnects }}</value>
+    </div>
+    <div class="metric">
+      <label>Uptime</label>
+      <value>{{ '%dh %dm' | format(r.uptime_seconds // 3600, (r.uptime_seconds % 3600) // 60) }}</value>
+    </div>
+    <div class="metric">
+      <label>Disk Free</label>
+      <value>{{ r.disk_free_mb }}MB</value>
+    </div>
+  </div>
+</div>
+{% else %}
+<div class="recorder-card recorder-offline">
+  <div class="recorder-header">
+    <span class="recorder-title">Tick Recorder</span>
+    <span class="badge badge-offline">Offline</span>
+    <span class="muted" style="font-size:0.7rem; margin-left:0.4rem;">No response from :8090</span>
+  </div>
+</div>
+{% endif %}

@@ -38,6 +38,11 @@ class DeribitAuth(ExchangeAuth):
     invalidated immediately by Deribit, so the swap must be atomic.
     """
 
+    # After this many consecutive request failures, mark exchange as unreachable
+    _UNREACHABLE_THRESHOLD = 3
+    # After this many consecutive failures, recreate the HTTP session
+    _SESSION_REFRESH_THRESHOLD = 5
+
     def __init__(
         self,
         client_id: Optional[str] = None,
@@ -50,12 +55,42 @@ class DeribitAuth(ExchangeAuth):
 
         self._session = requests.Session()
         self._lock = threading.Lock()
+        self._consecutive_failures = 0
 
         # Token state (guarded by _lock)
         self._access_token: Optional[str] = None
         self._refresh_token: Optional[str] = None
         self._token_expires_at: float = 0.0   # epoch when token expires
         self._token_refresh_at: float = 0.0   # epoch when we should refresh
+
+    @property
+    def reachable(self) -> bool:
+        """True when the exchange is responding normally."""
+        return self._consecutive_failures < self._UNREACHABLE_THRESHOLD
+
+    def _record_success(self) -> None:
+        """Reset failure counter on a successful request."""
+        if self._consecutive_failures > 0:
+            logger.info(
+                f"Deribit connection restored after {self._consecutive_failures} failure(s)"
+            )
+        self._consecutive_failures = 0
+
+    def _record_failure(self) -> None:
+        """Increment failure counter; refresh session after sustained failures."""
+        self._consecutive_failures += 1
+        if self._consecutive_failures == self._UNREACHABLE_THRESHOLD:
+            logger.warning(
+                f"Deribit marked UNREACHABLE after "
+                f"{self._consecutive_failures} consecutive failures"
+            )
+        if self._consecutive_failures >= self._SESSION_REFRESH_THRESHOLD:
+            logger.warning("Refreshing HTTP session to drop stale connections")
+            try:
+                self._session.close()
+            except Exception:
+                pass
+            self._session = requests.Session()
 
     # ── Public ExchangeAuth interface ────────────────────────────────
 
@@ -65,8 +100,14 @@ class DeribitAuth(ExchangeAuth):
         url = f"{self.base_url}/api/v2{endpoint}"
         try:
             resp = self._request_with_retry("GET", url, **kwargs)
-            return self._parse(resp)
+            result = self._parse(resp)
+            if "error" in result:
+                self._record_failure()
+            else:
+                self._record_success()
+            return result
         except requests.RequestException as e:
+            self._record_failure()
             logger.error(f"Deribit GET {endpoint} failed: {e}")
             return {"error": {"code": -1, "message": str(e)}}
 
@@ -82,8 +123,14 @@ class DeribitAuth(ExchangeAuth):
         }
         try:
             resp = self._request_with_retry("POST", url, json_body=body, **kwargs)
-            return self._parse(resp)
+            result = self._parse(resp)
+            if "error" in result:
+                self._record_failure()
+            else:
+                self._record_success()
+            return result
         except requests.RequestException as e:
+            self._record_failure()
             logger.error(f"Deribit POST {endpoint} failed: {e}")
             return {"error": {"code": -1, "message": str(e)}}
 
@@ -123,8 +170,14 @@ class DeribitAuth(ExchangeAuth):
             resp = self._session.post(
                 url, json=body, headers=headers, timeout=DEFAULT_REQUEST_TIMEOUT
             )
-            return self._parse(resp)
+            result = self._parse(resp)
+            if "error" in result:
+                self._record_failure()
+            else:
+                self._record_success()
+            return result
         except requests.RequestException as e:
+            self._record_failure()
             logger.error(f"Deribit RPC {method} failed: {e}")
             return {"error": {"code": -1, "message": str(e)}}
 

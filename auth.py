@@ -34,6 +34,11 @@ DEFAULT_REQUEST_TIMEOUT = 30.0
 class CoincallAuth:
     """Handles Coincall API authentication and request signing"""
 
+    # After this many consecutive request failures, mark exchange as unreachable
+    _UNREACHABLE_THRESHOLD = 3
+    # After this many consecutive failures, recreate the HTTP session
+    _SESSION_REFRESH_THRESHOLD = 5
+
     def __init__(self, api_key: str, api_secret: str, base_url: str):
         """
         Initialize authentication handler
@@ -47,6 +52,36 @@ class CoincallAuth:
         self.api_secret = api_secret
         self.base_url = base_url
         self.session = requests.Session()
+        self._consecutive_failures = 0
+
+    @property
+    def reachable(self) -> bool:
+        """True when the exchange is responding normally."""
+        return self._consecutive_failures < self._UNREACHABLE_THRESHOLD
+
+    def _record_success(self) -> None:
+        """Reset failure counter on a successful request."""
+        if self._consecutive_failures > 0:
+            logger.info(
+                f"Coincall connection restored after {self._consecutive_failures} failure(s)"
+            )
+        self._consecutive_failures = 0
+
+    def _record_failure(self) -> None:
+        """Increment failure counter; refresh session after sustained failures."""
+        self._consecutive_failures += 1
+        if self._consecutive_failures == self._UNREACHABLE_THRESHOLD:
+            logger.warning(
+                f"Coincall marked UNREACHABLE after "
+                f"{self._consecutive_failures} consecutive failures"
+            )
+        if self._consecutive_failures >= self._SESSION_REFRESH_THRESHOLD:
+            logger.warning("Refreshing HTTP session to drop stale connections")
+            try:
+                self.session.close()
+            except Exception:
+                pass
+            self.session = requests.Session()
 
     def _create_signature(
         self, 
@@ -170,15 +205,22 @@ class CoincallAuth:
                 timeout=timeout,
             )
             response.raise_for_status()
+            self._record_success()
             return response.json()
         except requests.HTTPError as e:
-            # Client or server error — log and return error response
+            # Client errors (4xx) are valid responses — exchange is reachable
+            if e.response is not None and e.response.status_code < 500:
+                self._record_success()
+            else:
+                self._record_failure()
             logger.error(f"HTTP error {e.response.status_code}: {e}")
             return {'code': e.response.status_code, 'msg': str(e), 'data': None}
         except requests.Timeout as e:
+            self._record_failure()
             logger.error(f"API request timeout after {timeout}s: {e}")
             return {'code': 408, 'msg': 'Request timeout', 'data': None}
         except requests.RequestException as e:
+            self._record_failure()
             logger.error(f"API request failed (after retries): {e}")
             return {'code': 500, 'msg': str(e), 'data': None}
 

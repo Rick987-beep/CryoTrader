@@ -393,20 +393,23 @@ class PositionMonitor:
         monitor.stop()
     """
     
-    def __init__(self, account_manager=None, poll_interval: int = 10):
+    def __init__(self, account_manager=None, poll_interval: int = 10, auth=None):
         """
         Args:
             account_manager: ExchangeAccountManager adapter (injected by build_context).
                              Falls back to Coincall AccountManager if not provided.
             poll_interval: Seconds between each refresh (default 10)
+            auth: ExchangeAuth adapter — used to read ``reachable`` flag.
         """
         self._account_mgr = account_manager or AccountManager()
         self._poll_interval = poll_interval
+        self._auth = auth
         self._latest: Optional[AccountSnapshot] = None
         self._lock = threading.Lock()
         self._callbacks: List[Callable[[AccountSnapshot], None]] = []
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        self._was_reachable = True  # for transition detection
     
     # -- Public API -----------------------------------------------------------
     
@@ -523,8 +526,40 @@ class PositionMonitor:
     # -- Internal -------------------------------------------------------------
     
     def _poll_loop(self) -> None:
-        """Background loop: snapshot → callbacks → sleep."""
+        """Background loop: snapshot → callbacks → sleep.
+
+        When the exchange is unreachable (auth.reachable == False),
+        the poll interval ramps up to reduce pressure on a recovering
+        exchange and a Telegram alert is sent on the transition.  On
+        recovery the interval snaps back and a reconnect alert fires.
+        """
         while self._running:
+            # ── Check reachability transitions ───────────────────────
+            if self._auth is not None:
+                now_reachable = self._auth.reachable
+                if self._was_reachable and not now_reachable:
+                    logger.warning("Exchange marked UNREACHABLE — backing off polls")
+                    try:
+                        from telegram_notifier import get_notifier
+                        get_notifier().send(
+                            "⚠️ <b>Exchange unreachable</b>\n"
+                            "Consecutive API failures detected. "
+                            "Poll interval increased until connection restores."
+                        )
+                    except Exception:
+                        pass
+                elif not self._was_reachable and now_reachable:
+                    logger.info("Exchange RECONNECTED — resuming normal polls")
+                    try:
+                        from telegram_notifier import get_notifier
+                        get_notifier().send(
+                            "✅ <b>Exchange reconnected</b>\n"
+                            "API responding normally. Resuming standard polling."
+                        )
+                    except Exception:
+                        pass
+                self._was_reachable = now_reachable
+
             try:
                 snap = self.snapshot()
                 logger.debug(snap.summary_str())
@@ -538,9 +573,15 @@ class PositionMonitor:
                         
             except Exception as e:
                 logger.error(f"PositionMonitor poll error: {e}")
-            
-            # Sleep in small increments so stop() is responsive
-            for _ in range(self._poll_interval * 10):
+
+            # ── Adaptive sleep ───────────────────────────────────────
+            if self._auth is not None and not self._auth.reachable:
+                # Backoff: min(60, poll_interval * 2^n) capped at 60s
+                sleep_secs = min(60, self._poll_interval * 3)
+            else:
+                sleep_secs = self._poll_interval
+
+            for _ in range(int(sleep_secs * 10)):
                 if not self._running:
                     return
                 time.sleep(0.1)
