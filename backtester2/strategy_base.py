@@ -256,7 +256,9 @@ def _reprice_legs(state, pos):
     """Reprice all legs at current market. Returns total USD value.
 
     For long positions: uses bid (what you'd get selling).
-    For short positions: uses ask (what it'd cost to buy back).
+    For short positions: uses ask (what it'd cost to buy back), floored at
+    mark to prevent wide-spread false SL triggers in thin early-morning books.
+    If ask is missing (=0) for a short leg, returns None (SL skips that tick).
     """
     total = 0.0
     direction = pos.metadata.get("direction", "buy")
@@ -267,7 +269,12 @@ def _reprice_legs(state, pos):
         if quote is None:
             return None
         if direction == "sell":
-            total += quote.ask_usd  # Cost to close short
+            if quote.ask == 0.0:
+                return None  # Missing ask — skip this tick rather than misprice
+            # Floor: use max(ask, mark) so a stale/thin ask can't price below mark.
+            # This is still conservative — we never price better than ask.
+            effective_ask = max(quote.ask, quote.mark)
+            total += effective_ask * quote.spot
         else:
             total += quote.bid_usd  # Proceed from closing long
     return total

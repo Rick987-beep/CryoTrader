@@ -336,6 +336,7 @@ class LifecycleEngine:
         ]
         trade.state = TradeState.CLOSED
         trade.closed_at = time.time()
+        trade.metadata["expiry_settled"] = True
         trade._finalize_close()
 
         symbols = [leg.symbol for leg in trade.open_legs]
@@ -343,26 +344,7 @@ class LifecycleEngine:
             f"Trade {trade.id}: expired at settlement — {symbols} "
             f"→ CLOSED (PnL={trade.realized_pnl:+.4f})"
         )
-
-        # Telegram close notification
-        entry_cost = abs(trade.total_entry_cost())
-        pnl = trade.realized_pnl or 0.0
-        roi = (pnl / entry_cost * 100) if entry_cost else 0.0
-        hold_secs = (trade.closed_at - trade.opened_at) if trade.opened_at else 0.0
-        notifier = self._get_notifier()
-        if notifier:
-            try:
-                notifier.notify_trade_closed(
-                    strategy_name=trade.strategy_id or "unknown",
-                    trade_id=trade.id,
-                    pnl=pnl,
-                    roi=roi,
-                    hold_minutes=hold_secs / 60,
-                    entry_cost=entry_cost,
-                    close_legs=trade.close_legs,
-                )
-            except Exception as e:
-                logger.warning(f"Trade {trade.id}: expiry notification failed: {e}")
+        # Notification handled by strategy on_trade_closed callback
 
     def _evaluate_exits(self, trade: TradeLifecycle, account: AccountSnapshot) -> None:
         """Check exit conditions for an OPEN trade. Any True → PENDING_CLOSE."""

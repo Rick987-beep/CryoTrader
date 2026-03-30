@@ -399,6 +399,14 @@ class MarketData:
             
             if self.auth.is_successful(response):
                 depth = response.get('data', {})
+                # Enrich with mark price from option details if orderbook
+                # doesn't include it (Coincall orderbook endpoint omits mark)
+                if not depth.get('mark'):
+                    details = self.get_option_details(symbol)
+                    if details:
+                        mark = details.get('markPrice', 0)
+                        if mark:
+                            depth['mark'] = float(mark)
                 return depth
             else:
                 logger.error(f"Failed to get orderbook for {symbol}: {response.get('msg')}")

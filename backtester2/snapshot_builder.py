@@ -29,6 +29,8 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from backtester2.config import cfg as _cfg
+
 # Lazy import — only needed when building (avoids import cost for other modules)
 _HistoricOptionChain = None
 
@@ -192,8 +194,8 @@ def build_snapshots(
     data_dir=None,            # type: Optional[str]
     output_dir=None,          # type: Optional[str]
     pattern="btc_2026-*.parquet",  # type: str
-    interval_min=5,           # type: int
-    spot_interval_min=1,      # type: int
+    interval_min=None,        # type: Optional[int]
+    spot_interval_min=None,   # type: Optional[int]
 ):
     # type: (...) -> Tuple[str, str]
     """Build snapshot parquets from raw tick data.
@@ -216,12 +218,16 @@ def build_snapshots(
     """
     ChainClass = _get_chain_class()
 
-    # Resolve defaults relative to this file's location
+    # Resolve defaults from config (or caller overrides)
     base_dir = os.path.dirname(os.path.abspath(__file__))
     if data_dir is None:
-        data_dir = os.path.join(base_dir, "tardis_options", "data")
+        data_dir = _cfg.data.tardis_data_dir
     if output_dir is None:
-        output_dir = os.path.join(base_dir, "snapshots")
+        output_dir = _cfg.data.snapshots_dir
+    if interval_min is None:
+        interval_min = _cfg.data.snapshot_interval_min
+    if spot_interval_min is None:
+        spot_interval_min = _cfg.data.spot_interval_min
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -285,9 +291,9 @@ def build_snapshots(
         output_dir, f"spot_track_{date_start}_{date_end}.parquet"
     )
 
-    # Write with zstd compression
-    options_df.to_parquet(opt_path, compression="zstd", index=False)
-    spot_df.to_parquet(spot_path, compression="zstd", index=False)
+    # Write with configured compression
+    options_df.to_parquet(opt_path, compression=_cfg.data.parquet_compression, index=False)
+    spot_df.to_parquet(spot_path, compression=_cfg.data.parquet_compression, index=False)
 
     elapsed_total = _time.time() - t_total
     opt_size = os.path.getsize(opt_path)

@@ -39,9 +39,9 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=ct-recorder
 
-# Resource limits — recorder is lightweight; 200 MB is generous
+# Resource limits — 400 MB headroom for columnar buffers + burst subscribes
 LimitNOFILE=65535
-MemoryMax=200M
+MemoryMax=400M
 
 # Security hardening
 NoNewPrivileges=true

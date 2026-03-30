@@ -1,7 +1,8 @@
 # Backtester V2 — Architecture & Implementation Plan
 
 **Date:** 2026-03-25  
-**Status:** Implementation Complete — Profiling Outstanding  
+**Updated:** 2026-03-28  
+**Status:** Implementation Complete — Profiling Complete  
 **Goal:** Real-data backtester using historic Tardis/Deribit option prices
 
 ---
@@ -1039,3 +1040,68 @@ param_grid = {
 8. **Adaptive step resolution:** Some strategies may want 1-min option snapshots for specific time windows (e.g., around expiry). Could support a "high-res window" config in snapshot_builder without rebuilding the full dataset.
 
 9. **Snapshot versioning:** As we accumulate months of data, snapshot files get large. Consider date-range partitioned snapshots (e.g., monthly chunks) that can be loaded selectively.
+
+10. **Parallel grid execution:** The 560+ combos are fully independent. `multiprocessing.Pool` could split them across CPU cores for near-linear scaling. Main blocker: `_opt_groups` (Python dict of tuples) cannot be shared via `shared_memory` directly — would need to convert option data to flat columnar NumPy arrays first, then share those. Spot arrays are already NumPy and trivial to share. Estimated gain: 6×–8× on an M1 (8 perf cores).
+
+---
+
+## 11. Profiling Results (2026-03-28)
+
+Profiled on M1 Mac, 15 days of data, `daily_put_sell` strategy, 560 combos.
+
+### Baseline (pre-optimization)
+
+| Function | Total time | Calls | Notes |
+|---|---|---|---|
+| `_build_state` | 3.23s | 4,027 | itertuples + OptionQuote construction |
+| `_parse_expiry_date` | 1.64s | 1,564,458 | Uncached regex, called every tick per position |
+| `_reprice_legs` | 0.98s | 1,503,652 | SL check; unavoidable per open position |
+| `_check_expiry` | 0.82s | 1,508,458 | Regex + datetime.replace every tick |
+| **Total** | **~13.0s** | | |
+
+### Optimizations applied
+
+1. **`@lru_cache` on `_parse_expiry_date` and `_expiry_dt_utc`** (`daily_put_sell.py`)  
+   Expiry code set is tiny (~30 codes). Cache eliminates 1.5M redundant regex parses.  
+   *Saved: ~1.6s*
+
+2. **Pre-compute expiry deadline at position open** (`daily_put_sell.py`)  
+   `_expiry_dt_utc()` called once in `_try_open`, stored in `pos.metadata['expiry_dt']`.  
+   `_check_expiry` reads the stored value — no datetime arithmetic per tick.  
+   *Saved: ~0.5s*
+
+3. **Replace `itertuples()` with `zip(col.tolist())`** (`market_replay.py`, load time)  
+   pandas `itertuples()` creates a new `namedtuple` class (via `eval()`) per group.  
+   4,027 groups = 4,027 hidden class allocations. `zip(col.tolist())` eliminates these.  
+   *Saved: ~2.8s*
+
+4. **Lazy `OptionQuote` construction** (`market_replay.py`, `MarketState`)  
+   Chain has ~466 options per tick; strategies typically access 1–2.  
+   `_build_state` now stores raw `(bid, ask, mark, mark_iv, delta)` tuples in `_raw_options`.  
+   `get_option()` constructs `OptionQuote` on first access and caches in `_quote_cache`.  
+   `get_chain()` still constructs all options for an expiry — called only at entry (~14×/run).  
+   *Saved: ~1.8s*
+
+### Result
+
+| | Time | Function calls |
+|---|---|---|
+| Baseline | 13.0s | 63.9M |
+| After all optimizations | **6.3s** | 37.2M |
+| **Speedup** | **2.1×** | **41% fewer calls** |
+
+### Remaining hotspots (post-optimization)
+
+| Function | Time | Notes |
+|---|---|---|
+| `on_market_state` loop | 1.73s | 560 combos × 4,027 ticks; pure interpreter overhead — floor |
+| `_build_state` | 1.41s | Dict construction + 5 SpotBar allocations per tick |
+| `_reprice_legs` | 0.88s | Unavoidable: called each tick per open position |
+
+### Next optimization opportunity (not yet implemented)
+
+**Multiprocessing**: divide the 560 combos into chunks, one per CPU core.  
+Each worker gets a read-only view of the market data and runs its chunk independently.  
+Point combos are independent — zero coordination needed.  
+Blocked on: converting `_opt_groups` (Python dict) to shared-memory NumPy arrays before workers fork.  
+Estimated gain at 560 combos: **6×–8×** (M1 has 8 perf cores).

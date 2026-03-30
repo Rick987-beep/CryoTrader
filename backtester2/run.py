@@ -20,9 +20,10 @@ if PROJECT_ROOT not in sys.path:
 
 from backtester2.market_replay import MarketReplay
 from backtester2.engine import run_grid_full
-from backtester2.reporting_v2 import generate_html, combo_stats
+from backtester2.reporting_v2 import generate_html
 from backtester2.strategies.straddle_strangle import ExtrusionStraddleStrangle
 from backtester2.strategies.daily_put_sell import DailyPutSell
+from backtester2.config import cfg as _cfg
 
 # ── Strategy Registry ────────────────────────────────────────────
 
@@ -31,8 +32,8 @@ STRATEGIES = {
     "put_sell": DailyPutSell,
 }
 
-DEFAULT_OPTIONS = "backtester2/snapshots/options_20260309_20260323.parquet"
-DEFAULT_SPOT = "backtester2/snapshots/spot_track_20260309_20260323.parquet"
+DEFAULT_OPTIONS = _cfg.data.options_parquet
+DEFAULT_SPOT = _cfg.data.spot_parquet
 
 
 # ── Main ─────────────────────────────────────────────────────────
@@ -54,16 +55,19 @@ def main():
 
     # Load data
     t0 = time.time()
-    replay = MarketReplay(args.options, args.spot)
+    date_range_filter = getattr(strategy_cls, "DATE_RANGE", (None, None))
+    replay = MarketReplay(args.options, args.spot,
+                         start=date_range_filter[0], end=date_range_filter[1])
     print(f"  Data loaded: {len(replay._timestamps):,} intervals in {time.time()-t0:.1f}s")
 
     # Run grid
     t1 = time.time()
-    results = run_grid_full(strategy_cls, strategy_cls.PARAM_GRID, replay)
+    df, keys = run_grid_full(strategy_cls, strategy_cls.PARAM_GRID, replay)
     grid_time = time.time() - t1
 
-    total_trades = sum(len(v) for v in results.values())
-    print(f"  {len(results):,} combos, {total_trades:,} trades in {grid_time:.1f}s")
+    n_combos = len(keys)
+    total_trades = len(df)
+    print(f"  {n_combos:,} combos, {total_trades:,} trades in {grid_time:.1f}s")
 
     # Date range from spot data
     first_dt = datetime.fromtimestamp(
@@ -72,31 +76,37 @@ def main():
         int(replay._spot_ts[-1]) / 1_000_000, tz=timezone.utc)
     date_range = (first_dt.strftime("%Y-%m-%d"), last_dt.strftime("%Y-%m-%d"))
 
-    # Console summary — top 5
-    ranked = sorted(results.items(),
-                    key=lambda kv: sum(t.pnl for t in kv[1]), reverse=True)
-    print(f"\n  Top 5 combos:")
-    for key, trades in ranked[:5]:
+    # Console summary — top combos
+    totals = (
+        df.groupby("combo_idx")
+        .agg(total_pnl=("pnl", "sum"),
+             n=("pnl", "count"),
+             wins=("pnl", lambda x: (x > 0).sum()))
+        .sort_values("total_pnl", ascending=False)
+    )
+    print(f"\n  Top {_cfg.simulation.top_n_console} combos:")
+    for row in totals.head(_cfg.simulation.top_n_console).itertuples():
+        key = keys[row.Index]
         params = dict(key)
-        total = sum(t.pnl for t in trades)
-        wins = sum(1 for t in trades if t.pnl > 0)
-        wr = wins / len(trades) * 100 if trades else 0
+        wr = row.wins / row.n * 100 if row.n else 0
         label = " | ".join(f"{k}={_fmt_val(v)}" for k, v in sorted(params.items()))
-        print(f"    {label}  →  ${total:,.0f}  ({len(trades)} trades, {wr:.0f}% win)")
+        print(f"    {label}  →  ${row.total_pnl:,.0f}  ({row.n} trades, {wr:.0f}% win)")
 
     # Generate HTML report
     html = generate_html(
         strategy_name=strategy_cls.name,
         param_grid=strategy_cls.PARAM_GRID,
-        results=results,
+        df=df,
+        keys=keys,
         date_range=date_range,
         n_intervals=len(replay._timestamps),
         runtime_s=grid_time,
+        strategy_description=getattr(strategy_cls, "DESCRIPTION", ""),
     )
 
-    output_path = args.output or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        f"{args.strategy}_report.html")
+    reports_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports")
+    os.makedirs(reports_dir, exist_ok=True)
+    output_path = args.output or os.path.join(reports_dir, f"{args.strategy}_report.html")
     with open(output_path, "w") as f:
         f.write(html)
 

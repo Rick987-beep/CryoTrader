@@ -22,6 +22,7 @@ Usage:
         # state.spot, state.get_option(...), state.spot_bars, etc.
         pass
 """
+import math
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -29,6 +30,24 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+
+# Column order for the flat tuples stored in _opt_groups.
+# At load time, each timestamp group is converted from a pandas DataFrame
+# slice to a list of plain Python tuples via zip(col.tolist()...). This
+# avoids the per-group namedtuple class creation (and hidden eval() call)
+# that pandas itertuples() performs, cutting load time by ~5×.
+# If the parquet schema changes, update both _OPT_COLS and the _CI_* indices.
+_OPT_COLS = ["expiry", "strike", "is_call", "bid_price", "ask_price", "mark_price", "mark_iv", "delta"]
+_CI_EXPIRY   = 0
+_CI_STRIKE   = 1
+_CI_IS_CALL  = 2
+_CI_BID      = 3
+_CI_ASK      = 4
+_CI_MARK     = 5
+_CI_MARK_IV  = 6
+_CI_DELTA    = 7
+
+_isnan = math.isnan
 
 
 # ------------------------------------------------------------------
@@ -89,8 +108,20 @@ class MarketState:
     spot: float                 # BTC/USD (close of latest 1-min bar)
     spot_bars: List[SpotBar]    # 1-min bars since last MarketState (up to 5)
 
-    # Internal: pre-grouped option data for this interval
-    _options: Dict[Tuple[str, float, bool], "OptionQuote"] = field(
+    # Internal: raw option data stored as (bid, ask, mark, mark_iv, delta)
+    # tuples, keyed by (expiry, strike, is_call). OptionQuote objects are
+    # constructed lazily on the first get_option() call for each key and
+    # cached in _quote_cache for the lifetime of this tick.
+    #
+    # Why lazy? A typical option chain has ~466 instruments per 5-min interval.
+    # Most strategies only access 1–2 specific options per tick (e.g. repricing
+    # the one open position). Constructing all 466 OptionQuote dataclass objects
+    # upfront would waste ~99% of allocations. Lazy construction + per-tick
+    # cache gives O(1) repeat access at zero cost for unneeded options.
+    _raw_options: Dict[Tuple[str, float, bool], tuple] = field(
+        default_factory=dict, repr=False
+    )
+    _quote_cache: Dict[Tuple[str, float, bool], "OptionQuote"] = field(
         default_factory=dict, repr=False
     )
     _expiries: List[str] = field(default_factory=list, repr=False)
@@ -103,13 +134,37 @@ class MarketState:
 
     def get_option(self, expiry, strike, is_call):
         # type: (str, float, bool) -> Optional[OptionQuote]
-        """Single option lookup. O(1) dict access."""
-        return self._options.get((expiry, float(strike), bool(is_call)))
+        """Single option lookup. Constructs OptionQuote on first access per tick."""
+        key = (expiry, float(strike), bool(is_call))
+        q = self._quote_cache.get(key)
+        if q is not None:
+            return q
+        raw = self._raw_options.get(key)
+        if raw is None:
+            return None
+        bid, ask, mark, mark_iv, delta = raw
+        q = OptionQuote(
+            strike=float(strike),
+            is_call=bool(is_call),
+            expiry=expiry,
+            bid=bid,
+            ask=ask,
+            mark=mark,
+            mark_iv=mark_iv,
+            delta=delta,
+            spot=self.spot,
+        )
+        self._quote_cache[key] = q
+        return q
 
     def get_chain(self, expiry):
         # type: (str) -> List[OptionQuote]
         """All options for one expiry, sorted by strike."""
-        result = [q for key, q in self._options.items() if key[0] == expiry]
+        result = [
+            self.get_option(exp, strike, is_call)
+            for (exp, strike, is_call) in self._raw_options
+            if exp == expiry
+        ]
         result.sort(key=lambda q: (q.strike, q.is_call))
         return result
 
@@ -117,7 +172,7 @@ class MarketState:
         # type: (str) -> Optional[float]
         """ATM strike (nearest to spot) for an expiry."""
         strikes = set()
-        for (exp, strike, _), _ in self._options.items():
+        for (exp, strike, _) in self._raw_options:
             if exp == expiry:
                 strikes.add(strike)
         if not strikes:
@@ -148,7 +203,7 @@ class MarketState:
         call_target = atm + offset
         put_target = atm - offset
         strikes = set()
-        for (exp, s, _), _ in self._options.items():
+        for (exp, s, _) in self._raw_options:
             if exp == expiry:
                 strikes.add(s)
         if not strikes:
@@ -243,10 +298,23 @@ class MarketReplay:
                 self._spot_df["timestamp"] <= end_us
             ].reset_index(drop=True)
 
-        # Pre-group options by timestamp for fast access
-        self._opt_groups = {}  # type: Dict[int, pd.DataFrame]
+        # Pre-group options by timestamp: convert to list-of-plain-tuples once
+        # at load time using zip(col.tolist()...) rather than itertuples().
+        #
+        # Why not itertuples()? pandas.DataFrame.itertuples() creates a new
+        # namedtuple *class* (via eval()) for each group it processes. With
+        # 4,000+ timestamp groups that's 4,000 hidden class allocations at
+        # startup. zip(col.tolist()) extracts each column as a plain Python
+        # list first, then zips them into tuples — no class creation, ~5× faster
+        # for the groupby pass and produces plain tuples that _build_state
+        # accesses by integer index.
+        self._opt_groups = {}  # type: Dict[int, list]
         for ts, grp in self._opt_df.groupby("timestamp"):
-            self._opt_groups[int(ts)] = grp
+            cols = [grp[c].tolist() for c in _OPT_COLS]
+            self._opt_groups[int(ts)] = list(zip(*cols))
+
+        # Drop the DataFrame — no longer needed
+        del self._opt_df
 
         # All 5-min timestamps, filtered by step
         all_ts = np.array(sorted(self._opt_groups.keys()), dtype=np.int64)
@@ -269,7 +337,7 @@ class MarketReplay:
         # Drop DataFrames no longer needed
         del self._spot_df
 
-        n_opt = len(self._opt_df)
+        n_opt = sum(len(rows) for rows in self._opt_groups.values())
         n_ts = len(self._timestamps)
         n_spot = len(self._spot_ts)
         print(
@@ -351,26 +419,32 @@ class MarketReplay:
                 close=float(self._spot_close[i]),
             ))
 
-        # Options: build dict keyed by (expiry, strike, is_call)
-        options = {}  # type: Dict[Tuple[str, float, bool], OptionQuote]
+        # Options: build raw dict keyed by (expiry, strike, is_call).
+        # OptionQuote objects are constructed lazily in get_option().
+        raw_options = {}  # type: Dict[Tuple[str, float, bool], tuple]
         expiries = set()
-        grp = self._opt_groups.get(ts)
-        if grp is not None:
-            for row in grp.itertuples(index=False):
-                expiry = str(row.expiry)
-                strike = float(row.strike)
-                is_call = bool(row.is_call)
+        rows = self._opt_groups.get(ts)
+        if rows is not None:
+            for row in rows:
+                expiry = str(row[_CI_EXPIRY])
+                strike = float(row[_CI_STRIKE])
+                is_call = bool(row[_CI_IS_CALL])
                 expiries.add(expiry)
-                options[(expiry, strike, is_call)] = OptionQuote(
-                    strike=strike,
-                    is_call=is_call,
-                    expiry=expiry,
-                    bid=float(row.bid_price),
-                    ask=float(row.ask_price),
-                    mark=float(row.mark_price),
-                    mark_iv=float(row.mark_iv),
-                    delta=float(row.delta),
-                    spot=spot,
+                raw_bid = float(row[_CI_BID]) if not _isnan(row[_CI_BID]) else 0.0
+                raw_ask = float(row[_CI_ASK]) if not _isnan(row[_CI_ASK]) else 0.0
+                raw_mark = float(row[_CI_MARK])
+                # Data quality: if mark==0 the exchange has no pricing model for
+                # this option at this tick — any bid/ask values are unreliable.
+                if raw_mark == 0.0:
+                    raw_bid = 0.0
+                    raw_ask = 0.0
+                # Clamp corrupted ask: if ask > 10× mark, treat as missing.
+                # Covers artifacts like 8.6 BTC ask on a 0.001 BTC mark.
+                elif raw_ask > raw_mark * 10:
+                    raw_ask = 0.0
+                raw_options[(expiry, strike, is_call)] = (
+                    raw_bid, raw_ask, raw_mark,
+                    float(row[_CI_MARK_IV]), float(row[_CI_DELTA]),
                 )
 
         return MarketState(
@@ -378,7 +452,7 @@ class MarketReplay:
             dt=dt,
             spot=spot,
             spot_bars=spot_bars,
-            _options=options,
+            _raw_options=raw_options,
             _expiries=sorted(expiries),
             _spot_ts=self._spot_ts,
             _spot_highs_cum=self._spot_cum_high,

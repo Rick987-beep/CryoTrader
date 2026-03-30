@@ -52,6 +52,7 @@ analysis/
 docs/
 tests/
 deployment/
+backtester2/tickrecdata/
 
 # ── OS junk ─────────────────────────────────────────────────────────────
 .DS_Store

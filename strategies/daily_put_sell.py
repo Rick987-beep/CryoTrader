@@ -1,5 +1,5 @@
 """
-Daily Put Sell — BTC 1DTE OTM Put Selling Strategy (v2)
+Daily Put Sell — BTC 1DTE OTM Put Selling Strategy
 
 Sells a 1DTE BTC put option near -0.10 delta every day during 03:00–04:00 UTC.
 
@@ -12,24 +12,20 @@ Fair Price Model:
     - mark alone, if the book is empty (last resort)
   fairspread = fair - bid  (measures how far bid is from fair value)
 
-Open Execution (sell put — patient, up to ~5 min total):
-  Phase 1 — RFQ (20s silent + up to 3 min gated):
-    Collect market-maker quotes for 20s, then accept if the quote is
-    at least bid + 33% of fairspread.  MMs rarely beat the book at 3 AM,
-    so this often times out — but costs nothing to try.
-  Phase 2.1 — Limit at fair (60s):
+Open Execution (sell put — limit only, up to ~2.5 min total):
+  Phase 1 — Limit at fair (45s):
     Place limit sell at our computed fair price.
-  Phase 2.2 — Limit at bid + 33% of spread (60s):
+  Phase 2 — Limit at bid + 33% of spread (45s):
     Step closer to bid — one third of the way from bid to fair.
     Skipped if computed price < fair × (1 − MIN_BID_DISCOUNT_PCT%).
-  Phase 2.3 — Limit at bid (60s):
+  Phase 3 — Limit at bid (60s):
     Hit the bid — aggressive fill to ensure entry.
     Skipped if bid < fair × (1 − MIN_BID_DISCOUNT_PCT%).
 
 Minimum Fill Price (liquidity guard):
   MIN_BID_DISCOUNT_PCT controls the worst acceptable sell price relative to
   fair value.  Default 17%: we won't sell below fair × 0.83.  In thin weekend
-  or overnight markets where bid is far from fair, phases 2.2 and 2.3 will
+  or overnight markets where bid is far from fair, Phases 2 and 3 will
   refuse to place and the trade simply does not open.  The stop loss bypasses
   this check — once in a trade we close no matter what.
 
@@ -37,7 +33,6 @@ Stop Loss (fair-price based, 70% of premium):
   SL threshold = fill_price × 1.7 (70% loss).  Each tick, we recompute
   fair price.  If fair_price >= SL threshold, close via phased limit
   buy-to-close: 15s at fair → 15s stepping toward ask → aggressive at ask.
-  Skips RFQ entirely for fast execution on SL.
 
 Expiry:
   If SL does not fire, the option expires worthless (full win).
@@ -48,14 +43,12 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
-from ema_filter import ema20_filter
+from ema_filter import below_ema20_filter
 from market_data import get_btc_index_price, get_option_market_data
 from option_selection import LegSpec
 from strategy import (
     StrategyConfig,
-    # Entry conditions
     time_window,
-    min_available_margin_pct,
 )
 from trade_execution import ExecutionParams, ExecutionPhase
 from trade_lifecycle import RFQParams
@@ -83,18 +76,12 @@ ENTRY_HOUR_START = _p("ENTRY_HOUR_START", 3, int) # Open window: 03:00 UTC
 ENTRY_HOUR_END = _p("ENTRY_HOUR_END", 4, int)     # Close window: 04:00 UTC
 
 # Risk
-MIN_MARGIN_PCT = _p("MIN_MARGIN_PCT", 10, int)    # Require ≥10% available margin
 STOP_LOSS_PCT = _p("STOP_LOSS_PCT", 70, int)      # 70% loss of premium collected
 
-# RFQ open — phased execution
-RFQ_OPEN_TIMEOUT = _p("RFQ_OPEN_TIMEOUT", 200, int)         # 20s silent + 180s (3 min) gated window
-RFQ_INITIAL_WAIT = _p("RFQ_INITIAL_WAIT", 20, int)          # Collect quotes silently for 20s
-RFQ_SPREAD_FRACTION = _p("RFQ_SPREAD_FRACTION", 0.33)       # Accept if quote ≥ bid + 33% of fairspread
-
-# Limit open fallback — phased after RFQ timeout
-LIMIT_OPEN_FAIR_SECONDS = _p("LIMIT_OPEN_FAIR_SECONDS", 60, int)       # Phase 2.1: quote at fair price
-LIMIT_OPEN_PARTIAL_SECONDS = _p("LIMIT_OPEN_PARTIAL_SECONDS", 60, int) # Phase 2.2: quote at bid + 33% fairspread
-LIMIT_OPEN_BID_SECONDS = _p("LIMIT_OPEN_BID_SECONDS", 60, int)         # Phase 2.3: aggressive at bid
+# Limit open — phased execution
+LIMIT_OPEN_FAIR_SECONDS = _p("LIMIT_OPEN_FAIR_SECONDS", 45, int)       # Phase 1: quote at fair price
+LIMIT_OPEN_PARTIAL_SECONDS = _p("LIMIT_OPEN_PARTIAL_SECONDS", 45, int) # Phase 2: quote at bid + 33% fairspread
+LIMIT_OPEN_BID_SECONDS = _p("LIMIT_OPEN_BID_SECONDS", 60, int)         # Phase 3: aggressive at bid
 
 # Liquidity guard — minimum acceptable open fill price
 MIN_BID_DISCOUNT_PCT = _p("MIN_BID_DISCOUNT_PCT", 17)          # Won't sell below fair × (1 - %/100)
@@ -110,16 +97,6 @@ MAX_CONCURRENT = _p("MAX_CONCURRENT", 2, int)      # Allow 2 overlapping trades 
 
 
 # ─── Fair Price Calculation ─────────────────────────────────────────────────
-# At 3 AM, far-OTM option books are thin.  Exchange mark can diverge wildly
-# from what's actually tradeable.  This function computes a "fair" price by
-# cross-referencing mark against the orderbook:
-#   - mark between bid and ask  →  trust mark
-#   - mark outside bid/ask      →  use mid = (bid+ask)/2
-#   - only bid exists            →  max(mark, bid)
-#   - no book at all             →  mark (last resort)
-#
-# fairspread = fair - bid  measures the gap between bid and fair value.
-# fairspread_ask = ask - fair  measures the gap on the ask side.
 
 def compute_fair_price(symbol: str) -> Optional[dict]:
     """
@@ -167,49 +144,14 @@ def compute_fair_price(symbol: str) -> Optional[dict]:
     }
 
 
-# ─── Dynamic RFQ Gate ──────────────────────────────────────────────────────
-# The RFQ improvement gate is a percentage: how much better than the orderbook
-# bid the quote needs to be.  We compute this dynamically at trade time from
-# the fair price model:  quote ≥ bid + 33% * fairspread  ↔  improvement ≥ X%.
-
-def _compute_rfq_gate(trade) -> float:
-    """
-    Callable for metadata['rfq_min_book_improvement_pct'].
-
-    Called by execution_router just before submitting the RFQ.
-    Computes the improvement % threshold from the current fair price.
-    """
-    if not trade.open_legs:
-        return 999.0
-
-    symbol = trade.open_legs[0].symbol
-    fp = compute_fair_price(symbol)
-
-    if not fp or not fp['bid'] or fp['fairspread'] <= 0:
-        logger.warning(
-            f"[DailyPutSell] No bid or zero fairspread for {symbol} "
-            f"— RFQ gate set high (will likely time out)"
-        )
-        return 999.0
-
-    # Improvement = (quote - bid) / bid × 100
-    # We want quote ≥ bid + fraction × fairspread
-    # So: min_improvement = fraction × fairspread / bid × 100
-    gate_pct = RFQ_SPREAD_FRACTION * fp['fairspread'] / fp['bid'] * 100
-    logger.info(
-        f"[DailyPutSell] RFQ gate: bid=${fp['bid']:.2f} fair=${fp['fair']:.2f} "
-        f"spread=${fp['fairspread']:.2f} → min_improvement={gate_pct:.1f}%"
-    )
-    return gate_pct
-
 
 # ─── Exit Condition: Fair-Price Stop Loss ───────────────────────────────────
 # For a short put, we lose money when the option price RISES (underlying drops,
 # put goes ITM).  SL fires when the current fair price reaches 1.7× fill price,
 # meaning we'd lose 70% of the premium we collected.
 #
-# On trigger, this condition also configures the close execution: switches from
-# RFQ to limit mode with phased pricing (fair → step toward ask → aggressive).
+# On trigger, also configures the close execution: switches to phased limit
+# buy-to-close (fair → step toward ask → aggressive).
 
 def _fair_price_sl():
     """
@@ -217,9 +159,7 @@ def _fair_price_sl():
 
     SL threshold = fill_price × (1 + STOP_LOSS_PCT/100).
     Triggers when fair_price ≥ SL threshold.
-
-    On trigger, configures phased limit close (buy-to-close) and sets
-    execution_mode to 'limit' so the close bypasses RFQ.
+    On trigger, configures phased limit buy-to-close.
     """
     label = f"fair_price_sl({STOP_LOSS_PCT}%)"
 
@@ -290,12 +230,11 @@ def _fair_price_sl():
 
 def _on_trade_opened(trade, account) -> None:
     """
-    Called when the short put trade is opened (RFQ or limit filled).
+    Called when the short put trade is opened.
 
     1. Computes fair price and SL threshold from fill price.
     2. Logs entry details and sends Telegram notification.
     """
-    # Capture entry index price
     index_price = get_btc_index_price(use_cache=False)
     if index_price is not None:
         trade.metadata["entry_index_price"] = index_price
@@ -303,18 +242,15 @@ def _on_trade_opened(trade, account) -> None:
     leg = trade.open_legs[0] if trade.open_legs else None
     premium = leg.fill_price if leg and leg.fill_price else 0
 
-    # Compute fair price at open and SL threshold
+    fp = compute_fair_price(leg.symbol) if leg else None
     fair_at_open = None
-    if leg:
-        fp = compute_fair_price(leg.symbol)
-        if fp:
-            fair_at_open = fp['fair']
-            trade.metadata["fair_at_open"] = fair_at_open
-            trade.metadata["bid_at_open"] = fp['bid']
-            trade.metadata["ask_at_open"] = fp['ask']
-            trade.metadata["fairspread_at_open"] = fp['fairspread']
+    if fp:
+        fair_at_open = fp['fair']
+        trade.metadata["fair_at_open"] = fair_at_open
+        trade.metadata["bid_at_open"] = fp['bid']
+        trade.metadata["ask_at_open"] = fp['ask']
+        trade.metadata["fairspread_at_open"] = fp['fairspread']
 
-    # SL threshold: fill_price × 1.7 for 70% loss
     sl_threshold = None
     if premium and premium > 0:
         sl_threshold = float(premium) * (1.0 + STOP_LOSS_PCT / 100.0)
@@ -333,62 +269,41 @@ def _on_trade_opened(trade, account) -> None:
     logger.info(
         f"[DailyPutSell] Opened: SELL {leg.symbol if leg else '?'} "
         f"@ ${premium:.4f}  |  fair=${fair_at_open:.4f}  |  "
-        f"mark=${mark_at_open:.4f}  |  "
-        f"SL@=${sl_threshold:.4f}  |  BTC=${index_price:,.0f}"
-        if (fair_at_open and mark_at_open and sl_threshold and index_price)
-        else
-        f"[DailyPutSell] Opened: SELL {leg.symbol if leg else '?'} "
-        f"@ ${premium:.4f}"
+        f"mark=${mark_at_open:.4f}  |  SL@=${sl_threshold:.4f}  |  BTC=${index_price:,.0f}"
     )
-
-    # Log detailed pricing snapshot at entry
-    if leg:
-        fp = compute_fair_price(leg.symbol)
-        if fp:
-            logger.info(
-                f"[DailyPutSell] Entry prices: "
-                f"bid=${fp['bid'] or 0:.2f}  ask=${fp['ask'] or 0:.2f}  "
-                f"mid=${((fp['bid'] or 0) + (fp['ask'] or 0)) / 2:.2f}  "
-                f"fair=${fp['fair']:.2f}  mark=${fp['mark']:.2f}  "
-                f"fairspread=${fp['fairspread']:.2f}"
-            )
+    if fp:
+        logger.info(
+            f"[DailyPutSell] Entry prices: "
+            f"bid=${fp['bid'] or 0:.2f}  ask=${fp['ask'] or 0:.2f}  "
+            f"mid=${((fp['bid'] or 0) + (fp['ask'] or 0)) / 2:.2f}  "
+            f"fair=${fp['fair']:.2f}  mark=${fp['mark']:.2f}  "
+            f"fairspread=${fp['fairspread']:.2f}"
+        )
 
     # Telegram notification
     ts = datetime.now(timezone.utc).strftime("%H:%M UTC")
 
-    # Execution mode: RFQ result message or "Limit"
-    exec_mode = "unknown"
-    if trade.rfq_result and trade.rfq_result.success:
-        exec_mode = trade.rfq_result.message or "RFQ"
-    elif trade.rfq_result and not trade.rfq_result.success:
-        exec_mode = f"Limit (RFQ failed: {trade.rfq_result.message})"
-    else:
-        exec_mode = "Limit"
-
     # Opening duration
     duration_s = int(trade.opened_at - trade.created_at) if trade.opened_at and trade.created_at else 0
 
-    # Append limit phase to exec_mode (inferred from total open duration vs phase schedule)
-    if exec_mode.startswith("Limit") and duration_s > 0:
-        limit_elapsed = duration_s - RFQ_OPEN_TIMEOUT
-        if limit_elapsed < LIMIT_OPEN_FAIR_SECONDS:
-            exec_mode += " — Phase 2.1 (at fair)"
-        elif limit_elapsed < LIMIT_OPEN_FAIR_SECONDS + LIMIT_OPEN_PARTIAL_SECONDS:
-            exec_mode += " — Phase 2.2 (stepped)"
-        else:
-            exec_mode += " — Phase 2.3 (at bid)"
+    # Execution phase (inferred from duration vs phase schedule)
+    if duration_s <= LIMIT_OPEN_FAIR_SECONDS:
+        phase_label = "Phase 1 (at fair)"
+    elif duration_s <= LIMIT_OPEN_FAIR_SECONDS + LIMIT_OPEN_PARTIAL_SECONDS:
+        phase_label = "Phase 2 (stepped)"
+    else:
+        phase_label = "Phase 3 (at bid)"
 
     # Price block
     bid = fp['bid'] or 0 if fp else 0
     ask = fp['ask'] or 0 if fp else 0
     mid = (bid + ask) / 2 if (bid and ask) else 0
 
-    # Fill vs fair
-    fill_vs_fair = ""
-    if fair_at_open and premium:
-        diff = premium - fair_at_open
-        diff_pct = diff / fair_at_open * 100
-        fill_vs_fair = f"Fill vs fair: ${premium:.2f} vs ${fair_at_open:.2f} ({diff_pct:+.1f}%)"
+    # Fill distances
+    collected = float(premium) * float(leg.filled_qty) if leg and leg.filled_qty else 0.0
+    vs_fair = f"vs fair {(premium - fair_at_open) / fair_at_open * 100:+.1f}%" if fair_at_open else ""
+    vs_bid  = f"vs bid {(premium - bid) / bid * 100:+.1f}%" if bid else ""
+    distances = "  ·  ".join(x for x in [vs_fair, vs_bid] if x)
 
     try:
         get_notifier().send(
@@ -396,13 +311,11 @@ def _on_trade_opened(trade, account) -> None:
             f"Time: {ts}\n"
             f"ID: {trade.id}\n"
             f"SELL {leg.filled_qty}× {leg.symbol}\n\n"
-            f"Premium: <b>${premium:.2f}</b>\n"
-            f"Execution: {exec_mode}\n"
-            f"Duration: {duration_s}s\n\n"
+            f"Collected: <b>${collected:.2f}</b>  ({leg.filled_qty}× ${premium:.2f})\n"
+            f"{phase_label}  ·  {duration_s}s  ·  {distances}\n\n"
             f"Prices at open:\n"
             f"  mark=${mark_at_open or 0:.2f}  mid=${mid:.2f}  fair=${fair_at_open or 0:.2f}\n"
-            f"  bid=${bid:.2f}  ask=${ask:.2f}\n"
-            f"{fill_vs_fair}\n\n"
+            f"  bid=${bid:.2f}  ask=${ask:.2f}\n\n"
             f"BTC index: ${index_price:,.0f}" if index_price else "BTC index: N/A"
         )
     except Exception:
@@ -427,10 +340,10 @@ def _on_trade_closed(trade, account) -> None:
         exit_reason = f"SL ({STOP_LOSS_PCT}% loss, fair-price)"
     elif pnl <= -(abs(entry_cost) * STOP_LOSS_PCT / 100):
         exit_reason = f"SL ({STOP_LOSS_PCT}% loss)"
+    elif trade.metadata.get("expiry_settled"):
+        exit_reason = "expiry (worthless)"
     elif pnl > 0:
         exit_reason = "profit"
-    elif hold_seconds > 82800 and abs(pnl) < abs(entry_cost) * 0.05:
-        exit_reason = "expiry (worthless)"
 
     logger.info(
         f"[DailyPutSell] Closed: {trade.id}  |  PnL: ${pnl:+.4f}  |  "
@@ -554,8 +467,7 @@ def daily_put_sell() -> StrategyConfig:
         # ── When to enter ────────────────────────────────────────────
         entry_conditions=[
             time_window(ENTRY_HOUR_START, ENTRY_HOUR_END),
-            # ema20_filter(),                       # TEST: disabled
-            # min_available_margin_pct(MIN_MARGIN_PCT),  # TEST: disabled
+            below_ema20_filter(),
         ],
 
         # ── When to exit ─────────────────────────────────────────────
@@ -568,14 +480,11 @@ def daily_put_sell() -> StrategyConfig:
         ],
 
         # ── How to execute ───────────────────────────────────────────
-        # OPEN path: RFQ phased → limit phased fallback.
-        #   RFQ: 20s silent + 3 min gated (bid + 33% fairspread).
-        #   Limit fallback: 60s at fair → 60s at bid+33%spread → 60s at bid.
+        # OPEN path: limit only, 3 phases (45s fair → 45s stepped → 60s bid).
         # CLOSE path: Configured dynamically by _fair_price_sl when SL fires
         #   (limit phased, no RFQ). For non-SL closes (manual/emergency),
         #   rfq_params provides a reasonable RFQ close as fallback.
-        execution_mode="rfq",
-        rfq_action="sell",
+        execution_mode="limit",
 
         # rfq_params: used for non-SL close paths (manual close, emergencies)
         rfq_params=RFQParams(
@@ -584,16 +493,15 @@ def daily_put_sell() -> StrategyConfig:
             fallback_mode="limit",
         ),
 
-        # execution_params: used for limit open fallback (after RFQ timeout)
-        # fair pricing with aggression 0→0.67→1.0 steps from fair→spread→bid
+        # execution_params: limit open — fair pricing, aggression 0→0.67→1.0
         execution_params=ExecutionParams(phases=[
-            # Phase 2.1: sell at fair price — reprice_interval=duration so no mid-phase drift
+            # Phase 1: sell at fair price
             ExecutionPhase(
                 pricing="fair", fair_aggression=0.0,
                 duration_seconds=LIMIT_OPEN_FAIR_SECONDS,
                 reprice_interval=LIMIT_OPEN_FAIR_SECONDS,
             ),
-            # Phase 2.2: sell at bid + 33% of fairspread — reprice_interval=duration so no mid-phase drift
+            # Phase 2: sell at bid + 33% of fairspread
             # min_price_pct_of_fair: refuse to place if computed price < fair × floor
             ExecutionPhase(
                 pricing="fair", fair_aggression=0.67,
@@ -601,7 +509,7 @@ def daily_put_sell() -> StrategyConfig:
                 reprice_interval=LIMIT_OPEN_PARTIAL_SECONDS,
                 min_price_pct_of_fair=1.0 - MIN_BID_DISCOUNT_PCT / 100.0,
             ),
-            # Phase 2.3: sell at bid (aggressive) — tracks bid every 15s
+            # Phase 3: sell at bid — tracks bid every 15s
             # min_price_pct_of_fair: refuse to place if bid < fair × floor
             ExecutionPhase(
                 pricing="fair", fair_aggression=1.0,
@@ -620,17 +528,4 @@ def daily_put_sell() -> StrategyConfig:
         # ── Callbacks ────────────────────────────────────────────────
         on_trade_opened=_on_trade_opened,
         on_trade_closed=_on_trade_closed,
-
-        # ── Metadata ─────────────────────────────────────────────────
-        # RFQ phased open configuration (read by execution_router):
-        #   - rfq_min_book_improvement_pct is a callable that computes
-        #     the gate dynamically from fair price at trade time
-        #   - relax_after=999 ensures the gate never relaxes (no Phase 3)
-        metadata={
-            "rfq_phased": True,
-            "rfq_initial_wait_seconds": RFQ_INITIAL_WAIT,
-            "rfq_min_book_improvement_pct": _compute_rfq_gate,
-            "rfq_timeout_seconds": RFQ_OPEN_TIMEOUT,
-            "rfq_relax_after_seconds": 999,
-        },
     )

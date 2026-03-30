@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] - 2026-03-30
+
+### Added — Below-EMA-20 Entry Filter & Limit-Only Execution
+
+- **`ema_filter.py`** — `below_ema20_filter()` / `is_btc_below_ema20()`: new entry condition that passes when the live BTC Deribit index price is at or below the EMA-20; blocks entry (fail-safe) if either data point is unavailable
+
+### Changed
+
+- **`strategies/daily_put_sell.py`** — Removed RFQ open path entirely; now limit-only (`execution_mode="limit"`) with 3 phases: 45s at fair → 45s stepped → 60s at bid; re-enabled entry filter (`below_ema20_filter()` — only sell puts when BTC ≤ EMA-20); Telegram open message now shows total collected premium, phase label, and fill-vs-fair/fill-vs-bid; expiry detection now reads `metadata["expiry_settled"]` flag instead of hold-time heuristic
+- **`lifecycle_engine.py`** — `_handle_expiry()` sets `metadata["expiry_settled"] = True` on the trade before calling `_finalize_close()`; removed duplicate Telegram notification (now handled by `on_trade_closed` callback)
+- **`market_data.py`** — `get_orderbook()` now enriches the depth dict with mark price fetched from option details when the Coincall orderbook endpoint omits it
+- **`backtester2/engine.py`** — `run_grid_full()` now returns `(df, keys)` (pandas DataFrame + key list) instead of `Dict[Tuple, List[Trade]]`; trades are decomposed and discarded immediately (~10× RAM reduction); progress interval configurable via `config.toml`
+- **`backtester2/reporting_v2.py`** — Ported to `(df, keys)` engine output; vectorised per-combo stats via pandas groupby (one pass for all combos)
+- **`backtester2/strategies/daily_put_sell.py`** — Synced with production strategy refactor
+- **`backtester2/tickrecorder/snapshotter.py`** — Various improvements to the tick recorder
+
+### Added — Test Suite Consolidation
+
+- **`tests/conftest.py`** — Shared fixtures: `MockExecutor`, `MockMarketData`, `make_account()`, `make_position()`
+- **`tests/test_conditions.py`**, **`tests/test_execution_params.py`**, **`tests/test_fill_manager.py`**, **`tests/test_lifecycle_engine.py`**, **`tests/test_option_selection.py`**, **`tests/test_persistence.py`**, **`tests/test_reconciliation.py`**, **`tests/test_strategy_runner.py`**, **`tests/test_trade_lifecycle.py`**, **`tests/test_deribit_symbols.py`** — New consolidated fast test suite (244 tests, ~1.6s); replaces the old scattered test files
+- **`tests/live/`** — Live Deribit testnet integration tests (25+ tests, skipped unless credentials present)
+- **`tests/manual/reachability.py`** — Interactive network-toggle script
+- **`pyproject.toml`** — pytest config: `addopts = "-m 'not live'"`, `live` marker
+
 ## [1.9.0] - 2026-03-27
 
 ### Added — Exchange Reachability Monitoring & Tick Recorder

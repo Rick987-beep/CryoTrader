@@ -6,20 +6,29 @@ Receives raw ticks from ws_client, maintains last-known state per
 instrument, and writes 5-min snapshots to zstd-compressed parquet
 files that match the backtester2 schema exactly.
 
+Memory design (v1.9.1 — columnar buffers):
+  Snapshots are accumulated in pre-allocated numpy column arrays instead
+  of a List[dict].  This reduces daily memory from ~110 MB (278K Python
+  dicts) to ~29 MB (278K rows in compact columnar storage).  The transient
+  DataFrame built for each flush_partial() adds another ~11 MB briefly.
+  Total peak: ~45 MB even at end of day — well within the 400 MB limit.
+
 Memory guarantees:
-  - Tick dict bounded by active instrument count (~500 entries)
+  - Tick dict bounded by active instrument count (~1000 entries)
   - Spot bar list bounded: only current day's 1-min bars kept
-  - Daily snapshot buffer cleared at midnight UTC rotation
+  - Column buffers grow by ~1000 rows per snapshot, cleared at midnight
   - Expired instruments removed by notifying via remove_instruments()
 
 Crash recovery:
   - After every snapshot: atomically overwrites .partial_options_YYYY-MM-DD.parquet
-  - On startup: load_partial() restores today's data if a partial file exists
+  - On startup: load_partial() bulk-loads old rows into column arrays
+  - At midnight: write final sorted parquet, clear all buffers, gc.collect()
 """
+import gc
 import logging
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
@@ -41,6 +50,10 @@ _OPTION_COLS = [
 ]
 
 _SPOT_COLS = ["timestamp", "open", "high", "low", "close"]
+
+# Initial capacity for column buffers — grows automatically.
+# 1000 instruments x 300 snapshots/day = 300K rows.
+_INITIAL_CAPACITY = 320_000
 
 
 @dataclass
@@ -64,6 +77,125 @@ class _SpotMinute:
     bar_ts: int   # 1-min aligned timestamp in microseconds
 
 
+class _ColumnBuffer:
+    """Pre-allocated columnar storage for option snapshot rows.
+
+    Memory-efficient alternative to List[dict].  Each column is a numpy
+    array that grows by doubling when full.  String columns (expiry) use
+    a Python list since numpy string arrays are awkward.
+
+    At 300K rows (full day, 1000 instruments):
+      - 8 float32 cols x 300K x 4 bytes  =  9.6 MB
+      - 1 int64 col    x 300K x 8 bytes  =  2.4 MB
+      - 1 bool col     x 300K x 1 byte   =  0.3 MB
+      - expiry list    x 300K x ~56 bytes = 16.8 MB (Python str overhead)
+      Total: ~29 MB  (vs ~110 MB with List[dict])
+    """
+
+    def __init__(self, capacity=_INITIAL_CAPACITY):
+        # type: (int) -> None
+        self._cap = capacity
+        self._len = 0
+        self.timestamp = np.empty(capacity, dtype=np.int64)
+        self.expiry = []               # type: List[str]
+        self.strike = np.empty(capacity, dtype=np.float32)
+        self.is_call = np.empty(capacity, dtype=bool)
+        self.underlying_price = np.empty(capacity, dtype=np.float32)
+        self.bid_price = np.empty(capacity, dtype=np.float32)
+        self.ask_price = np.empty(capacity, dtype=np.float32)
+        self.mark_price = np.empty(capacity, dtype=np.float32)
+        self.mark_iv = np.empty(capacity, dtype=np.float32)
+        self.delta = np.empty(capacity, dtype=np.float32)
+
+    def __len__(self):
+        # type: () -> int
+        return self._len
+
+    def _grow(self, needed):
+        # type: (int) -> None
+        """Double capacity until it fits needed additional rows."""
+        new_cap = self._cap
+        while new_cap < self._len + needed:
+            new_cap *= 2
+        if new_cap == self._cap:
+            return
+        for name in ("timestamp", "strike", "is_call",
+                     "underlying_price", "bid_price", "ask_price",
+                     "mark_price", "mark_iv", "delta"):
+            old = getattr(self, name)
+            new = np.empty(new_cap, dtype=old.dtype)
+            new[:self._len] = old[:self._len]
+            setattr(self, name, new)
+        self._cap = new_cap
+
+    def append_batch(self, n, timestamp_val, expiries, strikes, is_calls,
+                     underlying, bids, asks, marks, ivs, deltas):
+        # type: (int, int, list, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray) -> None
+        """Append n rows for one snapshot boundary."""
+        if self._len + n > self._cap:
+            self._grow(n)
+        s = self._len
+        e = s + n
+        self.timestamp[s:e] = timestamp_val
+        self.expiry.extend(expiries)
+        self.strike[s:e] = strikes
+        self.is_call[s:e] = is_calls
+        self.underlying_price[s:e] = underlying
+        self.bid_price[s:e] = bids
+        self.ask_price[s:e] = asks
+        self.mark_price[s:e] = marks
+        self.mark_iv[s:e] = ivs
+        self.delta[s:e] = deltas
+        self._len = e
+
+    def load_from_dataframe(self, df):
+        # type: (pd.DataFrame) -> None
+        """Bulk-load rows from a pandas DataFrame (crash recovery)."""
+        n = len(df)
+        if n == 0:
+            return
+        if self._len + n > self._cap:
+            self._grow(n)
+        s = self._len
+        e = s + n
+        self.timestamp[s:e] = df["timestamp"].values
+        self.expiry.extend(df["expiry"].values.tolist())
+        self.strike[s:e] = df["strike"].values
+        self.is_call[s:e] = df["is_call"].values
+        self.underlying_price[s:e] = df["underlying_price"].values
+        self.bid_price[s:e] = df["bid_price"].values
+        self.ask_price[s:e] = df["ask_price"].values
+        self.mark_price[s:e] = df["mark_price"].values
+        self.mark_iv[s:e] = df["mark_iv"].values
+        self.delta[s:e] = df["delta"].values
+        self._len = e
+
+    def to_dataframe(self):
+        # type: () -> pd.DataFrame
+        """Build a DataFrame from accumulated rows. O(n) copy."""
+        n = self._len
+        if n == 0:
+            return pd.DataFrame(columns=_OPTION_COLS)
+        return pd.DataFrame({
+            "timestamp": self.timestamp[:n].copy(),
+            "expiry": self.expiry[:n],
+            "strike": self.strike[:n].copy(),
+            "is_call": self.is_call[:n].copy(),
+            "underlying_price": self.underlying_price[:n].copy(),
+            "bid_price": self.bid_price[:n].copy(),
+            "ask_price": self.ask_price[:n].copy(),
+            "mark_price": self.mark_price[:n].copy(),
+            "mark_iv": self.mark_iv[:n].copy(),
+            "delta": self.delta[:n].copy(),
+        }, columns=_OPTION_COLS)
+
+    def clear(self):
+        # type: () -> None
+        """Reset to empty, keeping allocated memory for reuse."""
+        self._len = 0
+        self.expiry.clear()
+
+
 class Snapshotter:
     """Aggregates live ticks into 5-min snapshots and writes daily parquets.
 
@@ -78,15 +210,14 @@ class Snapshotter:
 
         # Spot (BTC-PERPETUAL) tracking
         self._spot_current_bar = None   # type: Optional[_SpotMinute]
-        self._spot_bars_today = []      # type: List[_SpotMinute]  # bounded: ≤1440/day
+        self._spot_bars_today = []      # type: List[_SpotMinute]  # bounded: <=1440/day
 
-        # Accumulated daily snapshot rows — cleared at midnight
-        self._daily_option_rows = []    # type: List[dict]
-        self._daily_spot_rows = []      # type: List[dict]
+        # Columnar buffer — replaces the old List[dict] accumulator
+        self._buf = _ColumnBuffer()
 
         # Timer state
         self._last_snapshot_ts = None   # type: Optional[datetime]
-        self._next_snapshot_ts = None   # type: Optional[int]  # unix µs, aligned
+        self._next_snapshot_ts = None   # type: Optional[int]  # unix us, aligned
 
         # Statistics
         self._snapshots_today = 0
@@ -188,33 +319,37 @@ class Snapshotter:
         # type: () -> None
         """Write current daily buffer as a partial file (crash recovery).
         Uses atomic rename to avoid corrupt reads."""
-        if not self._daily_option_rows:
+        if len(self._buf) == 0:
             return
         date_str = self._current_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         self._write_parquet_atomic(date_str, partial=True)
 
     def load_partial(self, date_str):
         # type: (str) -> int
-        """Load a partial file from a previous run into the daily buffer.
+        """Load a partial file from a previous run into the column buffer.
 
-        Returns the number of snapshot rows loaded (0 if no partial exists).
+        Returns the number of snapshots loaded (0 if no partial exists).
+        Uses bulk numpy operations — no Python-dict overhead.
         """
         partial_path = _partial_path(date_str)
         if not os.path.exists(partial_path):
             return 0
         try:
             df = pd.read_parquet(partial_path)
-            self._daily_option_rows = df.to_dict("records")
+            self._buf.load_from_dataframe(df)
             self._current_date = date_str
-            if self._daily_option_rows:
-                last_ts = max(r["timestamp"] for r in self._daily_option_rows)
+            if len(df) > 0:
+                last_ts = int(df["timestamp"].max())
                 self._last_snapshot_ts = _us_to_dt(last_ts)
                 self._next_snapshot_ts = last_ts + config.SNAPSHOT_INTERVAL_MIN * 60 * 1_000_000
+            snap_count = len(df["timestamp"].unique()) if len(df) > 0 else 0
             logger.info(
                 "Loaded partial snapshot file: %d rows from %s",
-                len(self._daily_option_rows), partial_path,
+                len(df), partial_path,
             )
-            return len(df["timestamp"].unique()) if len(df) > 0 else 0
+            del df
+            gc.collect()
+            return snap_count
         except Exception as exc:
             logger.warning("Failed to load partial file %s: %s", partial_path, exc)
             return 0
@@ -271,20 +406,37 @@ class Snapshotter:
 
     def _write_snapshot(self, boundary_us):
         # type: (int) -> None
-        """Freeze current tick state into one 5-min snapshot row set."""
-        for (expiry, strike, is_call), state in self._ticks.items():
-            self._daily_option_rows.append({
-                "timestamp": boundary_us,
-                "expiry": expiry,
-                "strike": np.float32(strike),
-                "is_call": is_call,
-                "underlying_price": np.float32(state.underlying_price),
-                "bid_price": np.float32(state.bid_price),
-                "ask_price": np.float32(state.ask_price),
-                "mark_price": np.float32(state.mark_price),
-                "mark_iv": np.float32(state.mark_iv),
-                "delta": np.float32(state.delta),
-            })
+        """Freeze current tick state into columnar buffer and flush to disk."""
+        n = len(self._ticks)
+        if n == 0:
+            return
+
+        # Build numpy arrays for this batch (~968 rows)
+        expiries = []
+        strikes = np.empty(n, dtype=np.float32)
+        is_calls = np.empty(n, dtype=bool)
+        underlying = np.empty(n, dtype=np.float32)
+        bids = np.empty(n, dtype=np.float32)
+        asks = np.empty(n, dtype=np.float32)
+        marks = np.empty(n, dtype=np.float32)
+        ivs = np.empty(n, dtype=np.float32)
+        deltas = np.empty(n, dtype=np.float32)
+
+        for i, ((expiry, strike, is_call), state) in enumerate(self._ticks.items()):
+            expiries.append(expiry)
+            strikes[i] = strike
+            is_calls[i] = is_call
+            underlying[i] = state.underlying_price
+            bids[i] = state.bid_price
+            asks[i] = state.ask_price
+            marks[i] = state.mark_price
+            ivs[i] = state.mark_iv
+            deltas[i] = state.delta
+
+        self._buf.append_batch(
+            n, boundary_us, expiries, strikes, is_calls,
+            underlying, bids, asks, marks, ivs, deltas,
+        )
 
         # Seal current spot bar into today's list
         if self._spot_current_bar is not None:
@@ -299,9 +451,8 @@ class Snapshotter:
         logger.info("Day rotation: writing final parquets for %s", date_str)
         self._write_parquet_atomic(date_str, partial=False)
 
-        # Clear buffers — bounded memory guarantee
-        self._daily_option_rows = []
-        self._daily_spot_rows = []
+        # Clear buffers
+        self._buf.clear()
         self._spot_bars_today = []
         self._spot_current_bar = None
         self._snapshots_today = 0
@@ -318,14 +469,17 @@ class Snapshotter:
             except OSError:
                 pass
 
+        # Explicit GC to release memory back to OS after clearing buffers
+        gc.collect()
+
     def _write_parquet_atomic(self, date_str, partial=False):
         # type: (str, bool) -> None
         """Write options + spot parquets. Atomic: write to .tmp then rename."""
-        if not self._daily_option_rows:
+        if len(self._buf) == 0:
             return
 
-        # Options parquet
-        opt_df = pd.DataFrame(self._daily_option_rows, columns=_OPTION_COLS)
+        # Options parquet — built from columnar buffer (efficient)
+        opt_df = self._buf.to_dataframe()
         opt_df["expiry"] = opt_df["expiry"].astype("category")
         opt_df.sort_values(["timestamp", "expiry", "strike", "is_call"], inplace=True)
         opt_df.reset_index(drop=True, inplace=True)
@@ -336,6 +490,7 @@ class Snapshotter:
             final_path = os.path.join(config.DATA_DIR, f"options_{date_str}.parquet")
 
         _atomic_write_parquet(opt_df, final_path)
+        del opt_df
 
         # Spot track parquet — compile from accumulated bars
         all_bars = list(self._spot_bars_today)
@@ -369,7 +524,7 @@ class Snapshotter:
 
 def _parse_key(instrument_name):
     # type: (str) -> Optional[InstrumentKey]
-    """Parse BTC-28MAR26-80000-C → ("28MAR26", 80000.0, True)."""
+    """Parse BTC-28MAR26-80000-C -> ("28MAR26", 80000.0, True)."""
     parts = instrument_name.split("-")
     if len(parts) != 4 or parts[0] != "BTC":
         return None
@@ -408,7 +563,7 @@ def _us_to_dt(us):
 
 def _aligned_boundary(now_us, interval_min):
     # type: (int, int) -> int
-    """Return the current (not next) interval-aligned boundary in µs."""
+    """Return the current (not next) interval-aligned boundary in us."""
     interval_us = interval_min * 60 * 1_000_000
     return (now_us // interval_us) * interval_us
 

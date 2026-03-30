@@ -21,7 +21,10 @@ import itertools
 import time as _time
 from typing import Any, Dict, List, Optional, Tuple, Type
 
+from backtester2.config import cfg as _cfg
 from backtester2.strategy_base import Trade
+
+_progress_interval = _cfg.simulation.progress_interval
 
 
 def _grid_combos(param_grid):
@@ -132,8 +135,8 @@ def run_grid(
                 results[keys[i]].append(_trade_to_tuple(trade))
         last_state = state
 
-        # Progress every 500 states
-        if progress and n_states % 500 == 0:
+        # Progress every N states (configured in config.toml)
+        if progress and n_states % _progress_interval == 0:
             elapsed = _time.time() - t0
             print(f"  {n_states} states processed ({elapsed:.1f}s)...")
 
@@ -163,19 +166,34 @@ def run_grid_full(
     extra_params=None,  # type: Optional[Dict[str, Any]]
     progress=True,      # type: bool
 ):
-    # type: (...) -> Dict[Tuple, List[Trade]]
-    """Like run_grid but returns full Trade objects (not V1 tuples).
+    """Run all parameter combos in a single pass over market data.
 
-    Useful when you need trade metadata for detailed analysis.
+    Accumulates trades into flat lists, then builds a memory-efficient
+    pandas DataFrame (~10× less RAM than keeping Trade objects alive).
+
+    Args:
+        strategy_cls: Strategy class (configure/on_market_state/on_end/reset).
+        param_grid:   Dict of param_name → list of values.
+        replay:       MarketReplay instance (iterable of MarketState).
+        extra_params: Optional fixed params merged into every combo.
+        progress:     Print progress updates.
+
+    Returns:
+        Tuple of (df, keys):
+        - df:   pandas DataFrame, one row per closed trade.
+                Column "combo_idx" (int16/int32) is an index into keys.
+        - keys: List[Tuple], where keys[i] is the param tuple for combo_idx i.
     """
+    import pandas as pd
+
     combos = _grid_combos(param_grid)
     n_combos = len(combos)
 
     if progress:
-        print(f"Running {n_combos} parameter combos (full trade mode)...")
+        print(f"Running {n_combos} parameter combos...")
 
-    instances = []
-    keys = []
+    instances = []  # type: List[Any]
+    keys = []       # type: List[Tuple]
     for params in combos:
         full_params = dict(params)
         if extra_params:
@@ -185,7 +203,35 @@ def run_grid_full(
         instances.append(strategy)
         keys.append(_params_to_key(params))
 
-    results = {k: [] for k in keys}  # type: Dict[Tuple, List[Trade]]
+    # Flat lists — Trade objects are decomposed immediately and discarded
+    _combo_idx = []
+    _entry_time = []
+    _exit_time = []
+    _entry_spot = []
+    _exit_spot = []
+    _entry_price_usd = []
+    _exit_price_usd = []
+    _fees = []
+    _pnl = []
+    _triggered = []
+    _exit_reason = []
+    _exit_hour = []
+    _entry_date = []
+
+    def _append(i, trade):
+        _combo_idx.append(i)
+        _entry_time.append(trade.entry_time)
+        _exit_time.append(trade.exit_time)
+        _entry_spot.append(trade.entry_spot)
+        _exit_spot.append(trade.exit_spot)
+        _entry_price_usd.append(trade.entry_price_usd)
+        _exit_price_usd.append(trade.exit_price_usd)
+        _fees.append(trade.fees)
+        _pnl.append(trade.pnl)
+        _triggered.append(trade.triggered)
+        _exit_reason.append(trade.exit_reason)
+        _exit_hour.append(trade.exit_hour)
+        _entry_date.append(trade.entry_date)
 
     t0 = _time.time()
     n_states = 0
@@ -194,17 +240,21 @@ def run_grid_full(
     for state in replay:
         n_states += 1
         for i, strategy in enumerate(instances):
-            trades = strategy.on_market_state(state)
-            results[keys[i]].extend(trades)
+            for trade in strategy.on_market_state(state):
+                _append(i, trade)
         last_state = state
+
+        if progress and n_states % _progress_interval == 0:
+            elapsed = _time.time() - t0
+            print(f"  {n_states} states processed ({elapsed:.1f}s)...")
 
     if last_state is not None:
         for i, strategy in enumerate(instances):
-            trades = strategy.on_end(last_state)
-            results[keys[i]].extend(trades)
+            for trade in strategy.on_end(last_state):
+                _append(i, trade)
 
     elapsed = _time.time() - t0
-    total_trades = sum(len(v) for v in results.values())
+    total_trades = len(_pnl)
 
     if progress:
         print(
@@ -212,4 +262,21 @@ def run_grid_full(
             f"= {total_trades:,} trades in {elapsed:.1f}s"
         )
 
-    return results
+    # Build DataFrame with compact dtypes
+    idx_dtype = "int16" if n_combos <= 32767 else "int32"
+    df = pd.DataFrame({
+        "combo_idx":       pd.array(_combo_idx, dtype=idx_dtype),
+        "entry_time":      pd.to_datetime(_entry_time),
+        "exit_time":       pd.to_datetime(_exit_time),
+        "entry_spot":      pd.array(_entry_spot, dtype="float32"),
+        "exit_spot":       pd.array(_exit_spot, dtype="float32"),
+        "entry_price_usd": pd.array(_entry_price_usd, dtype="float32"),
+        "exit_price_usd":  pd.array(_exit_price_usd, dtype="float32"),
+        "fees":            pd.array(_fees, dtype="float32"),
+        "pnl":             pd.array(_pnl, dtype="float32"),
+        "triggered":       _triggered,
+        "exit_reason":     pd.Categorical(_exit_reason),
+        "exit_hour":       pd.array(_exit_hour, dtype="int16"),
+        "entry_date":      _entry_date,
+    })
+    return df, keys

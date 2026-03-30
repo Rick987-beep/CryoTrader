@@ -7,29 +7,34 @@ target delta, collects premium, and exits either when the stop-loss
 triggers or the option expires.
 
 Grid parameters:
-    target_delta  [-0.05, -0.10, -0.15, -0.20]  — OTM put delta to target
-    stop_loss_pct [0.5, 0.7, 1.0, 1.5, 2.0]     — SL as fraction of premium
+    target_delta  [-0.05, -0.10, -0.15, -0.20, -0.25]  — OTM put delta to target
+    stop_loss_pct [0.5, 0.7, 1.0, 1.5, 2.0, 2.5]       — SL as fraction of premium
 
 Pricing modes:
     "real"  — sell at bid, buy back at ask (conservative, default)
     "bs"    — Black-Scholes with snapshot IV
 """
 import re
-from datetime import datetime
+from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
-from backtester2.pricing import deribit_fee_per_leg, bs_put, HOURS_PER_YEAR
+from backtester2.pricing import deribit_fee_per_leg, bs_put, HOURS_PER_YEAR, EXPIRY_HOUR_UTC
 from backtester2.strategy_base import (
     OpenPosition, Trade, close_trade,
     time_window, weekday_only, stop_loss_pct,
 )
 
-EXPIRY_HOUR_UTC = 8
 
-
+@lru_cache(maxsize=64)
 def _parse_expiry_date(expiry_code):
     # type: (str) -> Optional[datetime]
-    """Parse Deribit expiry code like '15MAR26' to a datetime."""
+    """Parse Deribit expiry code like '15MAR26' to a datetime.
+
+    lru_cache: expiry codes are static strings (e.g. '28MAR26'). Without
+    caching this regex runs once per tick per open position — ~1.5M times
+    in a 560-combo grid run. With cache: at most ~30 unique codes ever seen.
+    """
     month_map = {
         "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4,
         "MAY": 5, "JUN": 6, "JUL": 7, "AUG": 8,
@@ -46,15 +51,30 @@ def _parse_expiry_date(expiry_code):
     return datetime(year, month, day)
 
 
+@lru_cache(maxsize=64)
+def _expiry_dt_utc(expiry_code, tzinfo):
+    # type: (str, Any) -> Optional[datetime]
+    """Return the UTC expiry deadline datetime for an expiry code.
+
+    lru_cache: called once per position open and then stored in
+    pos.metadata['expiry_dt']. The cache also speeds up _nearest_1dte_expiry
+    which calls _parse_expiry_date repeatedly across all expiries each tick.
+    """
+    exp_date = _parse_expiry_date(expiry_code)
+    if exp_date is None:
+        return None
+    return exp_date.replace(hour=EXPIRY_HOUR_UTC, tzinfo=tzinfo)
+
+
 def _nearest_1dte_expiry(state):
     # type: (Any) -> Optional[str]
-    """Find the nearest 1DTE expiry (expires tomorrow)."""
-    tomorrow = (state.dt.date().__class__(
-        state.dt.year, state.dt.month, state.dt.day
-    ))
-    # Find expiry that is 1 day out
-    from datetime import timedelta
-    target_date = tomorrow + timedelta(days=1)
+    """Find the 1DTE expiry (expires tomorrow at 08:00 UTC).
+
+    Returns the expiry with diff == 1. If tomorrow's expiry is absent from
+    the snapshot, logs a warning and returns None (no trade that tick).
+    """
+    import warnings
+    today = state.dt.date()
 
     best = None
     best_diff = None
@@ -62,11 +82,18 @@ def _nearest_1dte_expiry(state):
         exp_date = _parse_expiry_date(exp)
         if exp_date is None:
             continue
-        diff = (exp_date.date() - tomorrow).days
-        if diff >= 1:  # At least 1 day out
+        diff = (exp_date.date() - today).days
+        if diff >= 1:
             if best_diff is None or diff < best_diff:
                 best = exp
                 best_diff = diff
+
+    if best is not None and best_diff != 1:
+        warnings.warn(
+            f"No 1DTE expiry at {state.dt.date()}, nearest is {best_diff}DTE ({best}). Skipping entry.",
+            stacklevel=2,
+        )
+        return None
     return best
 
 
@@ -74,19 +101,27 @@ class DailyPutSell:
     """Sell 1DTE OTM put daily, exit on stop-loss or expiry."""
 
     name = "daily_put_sell"
+    DATE_RANGE = ("2026-03-09", "2026-03-23")
+    contracts = 1  # contracts per trade
+    DESCRIPTION = (
+        "Sells a 1DTE OTM put daily at a target delta. "
+        "Exits on stop-loss (fraction of premium received) or at expiry (08:00 UTC). "
+        "One trade per day at a configurable UTC entry hour."
+    )
 
     PARAM_GRID = {
-        "target_delta": [-0.05, -0.10, -0.15, -0.20],
-        "stop_loss_pct": [0.5, 0.7, 1.0, 1.5, 2.0],
-        "entry_hour": [3],
+        "target_delta": [-0.10, -0.15, -0.20, -0.25, -0.30, -0.35, -0.40, -0.45],
+        "stop_loss_pct": [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5],
+        "entry_hour": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23], 
     }
 
     def __init__(self):
-        self._position = None  # type: Optional[OpenPosition]
+        self._positions = []  # type: List[OpenPosition]
         self._target_delta = -0.10
         self._sl_pct = 1.0
         self._entry_hour = 3
         self._pricing_mode = "real"
+        self._max_concurrent = 2
         self._entry_conditions = []
         self._exit_conditions = []
         self._trades_today = 0
@@ -98,12 +133,12 @@ class DailyPutSell:
         self._sl_pct = params["stop_loss_pct"]
         self._entry_hour = params.get("entry_hour", 3)
         self._pricing_mode = params.get("pricing_mode", "real")
-        self._position = None
+        self._max_concurrent = params.get("max_concurrent", 2)
+        self._positions = []
         self._trades_today = 0
         self._last_date = None
 
         self._entry_conditions = [
-            weekday_only(),
             time_window(self._entry_hour, self._entry_hour + 1),
         ]
         self._exit_conditions = [
@@ -120,19 +155,23 @@ class DailyPutSell:
             self._trades_today = 0
             self._last_date = today
 
-        # Check if position expired
-        if self._position is not None:
-            reason = self._check_expiry(state)
+        # Check each open position for expiry or stop-loss
+        still_open = []
+        for pos in self._positions:
+            reason = self._check_expiry(state, pos)
             if reason is None:
                 for exit_cond in self._exit_conditions:
-                    reason = exit_cond(state, self._position)
+                    reason = exit_cond(state, pos)
                     if reason:
                         break
             if reason:
-                trades.append(self._close(state, reason))
+                trades.append(self._close(state, pos, reason))
+            else:
+                still_open.append(pos)
+        self._positions = still_open
 
-        # Check entry if flat + max 1 per day
-        if self._position is None and self._trades_today < 1:
+        # Check entry: max 1 new trade per day, max_concurrent open at once
+        if self._trades_today < 1 and len(self._positions) < self._max_concurrent:
             if all(cond(state) for cond in self._entry_conditions):
                 self._try_open(state)
 
@@ -140,13 +179,13 @@ class DailyPutSell:
 
     def on_end(self, state):
         # type: (Any) -> List[Trade]
-        if self._position is not None:
-            return [self._close(state, "end_of_data")]
-        return []
+        trades = [self._close(state, pos, "end_of_data") for pos in self._positions]
+        self._positions = []
+        return trades
 
     def reset(self):
         # type: () -> None
-        self._position = None
+        self._positions = []
         self._trades_today = 0
         self._last_date = None
 
@@ -158,16 +197,12 @@ class DailyPutSell:
             "entry_hour": self._entry_hour,
         }
 
-    def _check_expiry(self, state):
-        # type: (Any) -> Optional[str]
-        """Check if held position's expiry has passed."""
-        expiry_code = self._position.metadata.get("expiry")
-        if expiry_code is None:
+    def _check_expiry(self, state, pos):
+        # type: (Any, OpenPosition) -> Optional[str]
+        """Check if a position's expiry has passed."""
+        exp_dt = pos.metadata.get("expiry_dt")
+        if exp_dt is None:
             return None
-        exp_date = _parse_expiry_date(expiry_code)
-        if exp_date is None:
-            return None
-        exp_dt = exp_date.replace(hour=EXPIRY_HOUR_UTC, tzinfo=state.dt.tzinfo)
         if state.dt >= exp_dt:
             return "expiry"
         return None
@@ -212,7 +247,9 @@ class DailyPutSell:
 
         fees = deribit_fee_per_leg(state.spot, entry_usd)
 
-        self._position = OpenPosition(
+        exp_dt = _expiry_dt_utc(expiry, state.dt.tzinfo)
+
+        self._positions.append(OpenPosition(
             entry_time=state.dt,
             entry_spot=state.spot,
             legs=[{
@@ -229,17 +266,17 @@ class DailyPutSell:
                 "target_delta": self._target_delta,
                 "actual_delta": best.delta,
                 "expiry": expiry,
+                "expiry_dt": exp_dt,
                 "direction": "sell",
                 "strike": best.strike,
                 "pricing_mode": self._pricing_mode,
             },
-        )
+        ))
         self._trades_today += 1
 
-    def _close(self, state, reason):
-        # type: (Any, str) -> Trade
-        """Close the short put position."""
-        pos = self._position
+    def _close(self, state, pos, reason):
+        # type: (Any, OpenPosition, str) -> Trade
+        """Close a short put position."""
         leg = pos.legs[0]
         expiry = pos.metadata["expiry"]
         strike = pos.metadata["strike"]
@@ -248,9 +285,16 @@ class DailyPutSell:
             # At expiry: put intrinsic value (what we owe if ITM)
             exit_usd = max(0.0, strike - state.spot)
         elif self._pricing_mode == "real":
-            # Buy back at ask (worst fill for buyer)
+            # Buy back at ask (worst fill for buyer).
+            # If ask is missing (=0), fall back to mark — never to 0,
+            # which would falsely record a windfall profit.
             quote = state.get_option(expiry, strike, is_call=False)
-            exit_usd = quote.ask_usd if quote else 0.0
+            if quote is None:
+                exit_usd = pos.entry_price_usd  # no data: assume flat (no gain/no loss)
+            elif quote.ask > 0:
+                exit_usd = quote.ask_usd
+            else:
+                exit_usd = quote.mark_usd
         else:
             # BS mode
             exp_date = _parse_expiry_date(expiry)
@@ -266,5 +310,4 @@ class DailyPutSell:
 
         trade = close_trade(state, pos, reason, exit_usd, fees_close)
         trade.metadata["stop_loss_pct"] = self._sl_pct
-        self._position = None
         return trade

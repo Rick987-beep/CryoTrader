@@ -3,10 +3,10 @@
 EMA Filter Module — BTC Price Trend Filter via Binance Klines
 
 Fetches BTCUSDT Perpetual daily klines from Binance public API and
-computes the EMA-20.  Exposes is_above_ema20() as an entry condition
-for strategies that only trade when price is above the daily EMA-20.
+computes the EMA-20.  Exposes two entry condition factories:
 
-Used by: daily_put_sell strategy (sell puts only when BTC > EMA-20).
+  ema20_filter()       — passes when live BTC index > EMA-20
+  below_ema20_filter() — passes when live BTC index < EMA-20
 
 Caching: kline data is cached for 1 hour since daily candles change
 slowly and the entry check runs every ~15 seconds.
@@ -143,8 +143,7 @@ def is_btc_above_ema20() -> bool:
     """
     Check if the current BTC price is above the daily EMA-20.
 
-    Uses the most recent daily close as the "current price" proxy,
-    since the EMA is computed on daily closes.
+    Uses the most recent daily close as the "current price" proxy.
 
     Returns:
         True if BTC close > EMA-20, False otherwise or on data error.
@@ -165,20 +164,57 @@ def is_btc_above_ema20() -> bool:
     return above
 
 
+def is_btc_below_ema20() -> bool:
+    """
+    Check if the live BTC index price is at or below the daily EMA-20
+    (i.e. EMA-20 >= BTC index).
+
+    Uses the live Deribit BTC index price.
+    Blocks entry (fail-safe) if either data point is unavailable.
+
+    Returns:
+        True if EMA-20 >= live BTC index, False otherwise or on data error.
+    """
+    from market_data import get_btc_index_price  # local import avoids circular dep
+
+    ema = get_ema20()
+    if ema is None:
+        logger.warning("EMA filter: no EMA data — blocking entry (fail-safe)")
+        return False
+
+    index_price = get_btc_index_price(use_cache=True)
+    if index_price is None:
+        logger.warning("EMA filter: no BTC index price — blocking entry (fail-safe)")
+        return False
+
+    passes = ema >= index_price
+    logger.info(
+        f"EMA filter: BTC index=${index_price:,.0f}, EMA-20=${ema:,.0f} "
+        f"→ {'EMA ≥ BTC ✓' if passes else 'EMA < BTC ✗'}"
+    )
+    return passes
+
+
 def ema20_filter():
     """
-    Entry condition factory for StrategyConfig.entry_conditions.
-
-    Returns a callable(account) -> bool that passes when BTC > EMA-20.
-
-    Usage in strategy config:
-        entry_conditions=[
-            ema20_filter(),
-            ...
-        ]
+    Entry condition factory: passes when live BTC price > EMA-20.
     """
     def _check(account) -> bool:
         return is_btc_above_ema20()
 
     _check.__name__ = "ema20_filter"
+    return _check
+
+
+def below_ema20_filter():
+    """
+    Entry condition factory: passes when EMA-20 >= live BTC index.
+
+    Opens a trade when BTC is at or below the EMA-20 line.
+    Blocks entry (fail-safe) if BTC index or EMA data is unavailable.
+    """
+    def _check(account) -> bool:
+        return is_btc_below_ema20()
+
+    _check.__name__ = "below_ema20_filter"
     return _check

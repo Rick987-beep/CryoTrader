@@ -35,7 +35,7 @@ Strategy.on_market_state()  →  List[Trade]  →  reporting_v2.py  →  HTML
 | Strategy | Class | Combos | Description |
 |---|---|---|---|
 | `straddle` | `ExtrusionStraddleStrangle` | 5,040 | Buy nearest-expiry ATM straddle/OTM strangle, exit on BTC index move |
-| `put_sell` | `DailyPutSell` | 20 | Sell 1DTE OTM put, exit on stop-loss or expiry |
+| `put_sell` | `DailyPutSell` | 560 | Sell 1DTE OTM put, exit on stop-loss or expiry |
 
 ## Key Design Notes
 
@@ -115,13 +115,20 @@ Open the generated HTML file in a browser. Sections include:
 
 ## Performance
 
-On M1 Mac (15 days of data, 4,310 intervals):
+On M1 Mac (15 days of data, 4,027 intervals):
 
 | Strategy | Combos | Time |
 |---|---|---|
 | Straddle/strangle | 5,040 | ~2 min |
-| Put sell | 20 | ~5s |
+| Put sell | 560 | ~6s |
 
-## Requirements
+### Performance notes
+
+The hot path is `engine.py`'s single-pass grid loop: one `MarketState` per 5-min interval, fed to all combo instances simultaneously. Several optimisations keep this tight:
+
+- **Option groups pre-converted at load time** — pandas `groupby` slices are converted to lists of plain tuples via `zip(col.tolist())` instead of `itertuples()`, avoiding per-group `namedtuple` class creation (~5× faster load).
+- **Lazy `OptionQuote` construction** — `_build_state` stores raw `(bid, ask, mark, mark_iv, delta)` tuples. `OptionQuote` dataclass objects are only constructed when a strategy actually calls `get_option()`, with a per-tick cache for repeat access. A typical chain has ~466 instruments; most strategies touch 1–2 per tick.
+- **Expiry date caching** — `_parse_expiry_date` and `_expiry_dt_utc` are decorated with `@lru_cache`. The expiry code set is tiny (~30 codes); without caching, regex parsing ran 1.5M times per grid run.
+- **Pre-computed expiry deadline** — stored in `pos.metadata['expiry_dt']` at position open; `_check_expiry` reads it directly instead of recomputing each tick.
 
 Python 3.9+. Dependencies: `pandas`, `numpy`, `pyarrow`.

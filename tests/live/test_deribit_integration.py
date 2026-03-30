@@ -17,14 +17,17 @@ Requirements:
   - Network access to https://test.deribit.com
 
 Usage:
-  python -m pytest tests/test_deribit_integration.py -v
-  python -m pytest tests/test_deribit_integration.py -v -k test_1  # auth only
+  python -m pytest tests/live/ -m live -v
+  python -m pytest tests/live/ -m live -v -k test_1  # auth only
 """
 
 import os
 import sys
 import time
 import pytest
+
+# Mark entire module as live
+pytestmark = pytest.mark.live
 
 # Ensure testnet
 os.environ.setdefault("TRADING_ENVIRONMENT", "testnet")

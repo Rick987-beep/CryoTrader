@@ -117,6 +117,12 @@ class ExtrusionStraddleStrangle:
     """
 
     name = "extrusion_straddle_strangle"
+    DATE_RANGE = ("2026-03-09", "2026-03-23")
+    DESCRIPTION = (
+        "Buys an ATM straddle or OTM strangle on the nearest unexpired daily expiry. "
+        "Exits when BTC spot moves by a configurable USD trigger from entry, or after max_hold hours. "
+        "One trade per day at a configurable UTC entry hour."
+    )
 
     PARAM_GRID = {
         "offset": [0, 500, 1000, 1500, 2000],

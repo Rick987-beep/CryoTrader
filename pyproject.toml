@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+markers = [
+    "live: tests that connect to a real exchange (deselected by default)",
+]
+addopts = "-m 'not live'"

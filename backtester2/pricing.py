@@ -2,13 +2,12 @@
 Black-Scholes option pricing, strike grid, vol estimation, and fee model.
 
 Reusable across any crypto option backtesting strategy.
-This is a leaf module with zero local imports — usable by any strategy or script.
 
 Key design decisions:
     - r=0 in BS (negligible for sub-24h options)
     - norm_cdf via math.erf (no scipy dependency)
     - Strike grid defaults to Deribit's $500 steps
-    - Vol clamped to 15%-300% to prevent numerical blowups
+    - Vol clamped to prevent numerical blowups (bounds from config.toml)
     - Fees use Deribit's MIN(0.03% x index, 12.5% x leg_price) model
 
 Used by: straddle_strangle.py, reporting.py
@@ -17,14 +16,16 @@ Used by: straddle_strangle.py, reporting.py
 import math
 import statistics
 
-# ── Constants ─────────────────────────────────────────────────────
+from backtester2.config import cfg as _cfg
 
-HOURS_PER_YEAR = 8760.0
-STRIKE_STEP = 500          # Deribit 0DTE strike grid
-VOL_LOOKBACK = 24          # trailing candles for vol
-MIN_VOL_CANDLES = 6        # minimum candles for vol estimate
-DEFAULT_VOL = 0.55         # fallback annualized vol
-EXPIRY_HOUR_UTC = 8        # Deribit 0DTE expiry
+# ── Constants (sourced from backtester2/config.toml) ──────────────
+
+HOURS_PER_YEAR    = _cfg.pricing.hours_per_year
+STRIKE_STEP       = _cfg.pricing.strike_step_usd
+VOL_LOOKBACK      = _cfg.pricing.vol_lookback_candles
+MIN_VOL_CANDLES   = _cfg.pricing.min_vol_candles
+DEFAULT_VOL       = _cfg.pricing.default_vol
+EXPIRY_HOUR_UTC   = _cfg.pricing.expiry_hour_utc
 
 
 # ── Strike Grid ───────────────────────────────────────────────────
@@ -107,7 +108,7 @@ def estimate_vol(sorted_candles, entry_index, lookback=VOL_LOOKBACK):
     log_rets = []
     for j in range(1, len(window)):
         dt_gap = (window[j]["dt"] - window[j - 1]["dt"]).total_seconds()
-        if dt_gap > 7200:
+        if dt_gap > _cfg.pricing.gap_reset_seconds:
             log_rets.clear()
             continue
         prev_close = window[j - 1]["close"]
@@ -120,13 +121,13 @@ def estimate_vol(sorted_candles, entry_index, lookback=VOL_LOOKBACK):
 
     hourly_std = statistics.stdev(log_rets)
     annualized = hourly_std * math.sqrt(HOURS_PER_YEAR)
-    return max(0.15, min(annualized, 3.0))
+    return max(_cfg.pricing.min_vol, min(annualized, _cfg.pricing.max_vol))
 
 
 # ── Fee Model ─────────────────────────────────────────────────────
 
 def deribit_fee_per_leg(btc_price, leg_price_usd):
     """Deribit: MIN(0.03% of index, 12.5% of option price) per leg per trade."""
-    base = 0.0003 * btc_price
-    cap = 0.125 * max(leg_price_usd, 0)
+    base = _cfg.fees.index_rate * btc_price
+    cap = _cfg.fees.price_cap_frac * max(leg_price_usd, 0)
     return min(base, cap)
