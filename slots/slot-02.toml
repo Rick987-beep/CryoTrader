@@ -1,21 +1,29 @@
 # ===========================================================================
-# Slot 02 — Short Straddle / Strangle (Deribit)
+# Slot 02 — Short Strangle Delta (Deribit)
 #
-# Backtester2 combo #1 (score 0.983): offset=$1500, entry=12:00 UTC,
-# SL=250%, max_hold=16h — $2,480 PnL, 14 trades, 79% win rate, Sharpe 18.23.
+# Sells an OTM strangle on the Deribit expiry N calendar days ahead (dte=1/2/3).
+# Legs selected by target delta rather than a fixed USD offset.
+#
+# Backtester2 param grid:
+#   dte:            [1, 2, 3]
+#   delta:          [0.10, 0.15, 0.20, 0.25, 0.30]
+#   entry_hour:     [1, 4, 8, 12, 16, 20]
+#   stop_loss_pct:  [0.75, 1.0, 1.5, 2.0, 3.0, 3.5]
+#   max_hold_hours: [0, 12, 36, 60]   (0 = hold to expiry / 08:00 UTC settlement)
 #
 # Edit params below, then deploy:
 #   ./deployment/deploy-slot.sh 02
 # ===========================================================================
 
-name = "Short Straddle Strangle"
-strategy = "short_straddle_strangle"
+name = "Short Strangle Delta"
+strategy = "short_strangle_delta"
 account = "deribit-main"
 
 [params]
-qty = 0.8
-offset = 1500
-entry_hour = 12
-stop_loss_pct = 2.5
-max_hold_hours = 16
-check_interval = 15
+qty             = 0.5    # contracts per leg
+dte             = 2      # target expiry: 1, 2, or 3 calendar days ahead
+delta           = 0.15   # target absolute delta per leg (e.g. 0.25 → 25Δ call + 25Δ put)
+entry_hour      = 12     # UTC hour for entry window (one-hour: ENTRY_HOUR to ENTRY_HOUR+1)
+stop_loss_pct   = 3.0    # SL fires when combined fair ≥ premium × (1 + stop_loss_pct)
+max_hold_hours  = 0      # max hold in hours; 0 = disabled (hold to 08:00 UTC expiry)
+check_interval  = 15     # seconds between strategy ticks

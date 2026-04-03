@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] - 2026-04-03
+
+### Added — Short Strangle Delta Strategy
+
+- **`strategies/short_strangle_delta.py`** — New live strategy: sells an OTM BTC strangle on the Deribit expiry N calendar days ahead; legs selected by target absolute delta (e.g. `delta=0.15` → nearest strike to ±15Δ) rather than a fixed USD offset from spot; configurable via `qty`, `dte`, `delta`, `entry_hour`, `stop_loss_pct`, `max_hold_hours`; two-phase open and close execution (fair price → aggressive bid/ask re-price after 30s); `MAX_CONCURRENT = DTE + 1` to allow day-overlap
+- **`tests/test_short_strangle_delta_tp.py`** — Unit tests for the delta strangle take-profit logic
+- **`tests/manual/smoke_short_straddle.py`** — Manual smoke test for the short straddle/strangle strategy
+
+### Changed
+
+- **`slots/slot-02.toml`** — Reconfigured slot 02 for `short_strangle_delta` (dte=2, delta=0.15, entry 12:00 UTC, SL=300%, max_hold disabled); previous short straddle/strangle config removed
+- **`strategies/short_straddle_strangle.py`** — Minor comment fix: "backtester2" → "backtester"
+
+### Changed — Backtester Restructure (`backtester2/` → `backtester/`)
+
+- **`backtester/`** — Complete reorganisation of `backtester2/` into a cleaner package layout: tick recorder and ingest tooling moved under `backtester/ingest/` (`tickrecorder/`, `tardis/`, `snapshot_builder.py`); engine, strategy, and reporting files live directly under `backtester/`; new `backtester/strategies/short_strangle_delta.py` and `short_strangle_delta_tp.py` for backtesting the new strategy
+- **`deployment/ct-recorder.service`** — Updated `ExecStart` module path: `backtester2.tickrecorder.recorder` → `backtester.ingest.tickrecorder.recorder`
+- **`deployment/rsync-exclude-recorder.txt`** — Exclusion paths updated for new `backtester/ingest/` layout; removed stale `backtester2/` entries
+- **`deployment/rsync-exclude-slot.txt`** — `backtester2/` exclusion updated to `backtester/`
+
 ## [1.11.0] - 2026-03-31
 
 ### Added — Short Straddle / Strangle Strategy

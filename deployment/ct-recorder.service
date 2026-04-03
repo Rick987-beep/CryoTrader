@@ -24,7 +24,7 @@ Wants=network-online.target
 Type=simple
 
 WorkingDirectory=/opt/ct/recorder
-ExecStart=/opt/ct/recorder/.venv/bin/python -m backtester2.tickrecorder.recorder
+ExecStart=/opt/ct/recorder/.venv/bin/python -m backtester.ingest.tickrecorder.recorder
 
 # Load recorder-specific env (TELEGRAM_*, RECORDER_DATA_DIR, etc.)
 EnvironmentFile=/opt/ct/recorder/.env
