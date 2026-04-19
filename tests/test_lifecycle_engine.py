@@ -1,7 +1,7 @@
 """
 Unit tests for LifecycleEngine state machine.
 
-Patches ExecutionRouter and OrderManager to test state transitions
+Patches Router and OrderManager to test state transitions
 without exchange calls.
 """
 
@@ -12,12 +12,30 @@ import pytest
 
 from trade_lifecycle import TradeLeg, TradeLifecycle, TradeState, ExitCondition
 from trade_execution import ExecutionParams, LimitFillManager
+from execution.fill_result import FillResult, FillStatus
+from tests.conftest import MockExecutor, MockMarketData, make_account
+
+
+def _ok_result():
+    """A FillResult that signals successful placement (PENDING)."""
+    return FillResult(
+        status=FillStatus.PENDING, legs=[], phase_index=1, phase_total=1,
+        phase_pricing="aggressive", elapsed_seconds=0.0,
+    )
+
+
+def _fail_result(error="test_error"):
+    """A FillResult that signals failure."""
+    return FillResult(
+        status=FillStatus.FAILED, legs=[], phase_index=1, phase_total=1,
+        phase_pricing="aggressive", elapsed_seconds=0.0, error=error,
+    )
 from tests.conftest import MockExecutor, MockMarketData, make_account
 
 
 def make_engine(**kwargs):
     """Create a LifecycleEngine with fully-mocked dependencies."""
-    with patch("lifecycle_engine.ExecutionRouter") as MockRouter, \
+    with patch("lifecycle_engine.Router") as MockRouter, \
          patch("lifecycle_engine.OrderManager") as MockOM:
         mock_router_inst = MockRouter.return_value
         mock_om_inst = MockOM.return_value
@@ -75,7 +93,7 @@ class TestCreate:
 class TestOpen:
     def test_open_routes_to_router(self):
         engine, router, om = make_engine()
-        router.open.return_value = True
+        router.open.return_value = _ok_result()
         legs = [TradeLeg(symbol="SYM-C", qty=0.1, side="buy")]
         trade = engine.create(legs=legs)
         result = engine.open(trade.id)
@@ -104,7 +122,7 @@ class TestOpen:
 class TestClose:
     def test_close_routes_to_router(self):
         engine, router, om = make_engine()
-        router.close.return_value = True
+        router.close.return_value = _ok_result()
         legs = [TradeLeg(symbol="SYM-C", qty=0.1, side="buy")]
         trade = engine.create(legs=legs)
         trade.state = TradeState.OPEN
@@ -113,7 +131,7 @@ class TestClose:
 
     def test_close_allowed_from_pending_close(self):
         engine, router, om = make_engine()
-        router.close.return_value = True
+        router.close.return_value = _ok_result()
         legs = [TradeLeg(symbol="SYM-C", qty=0.1, side="buy")]
         trade = engine.create(legs=legs)
         trade.state = TradeState.PENDING_CLOSE
@@ -197,15 +215,20 @@ class TestTick:
 
     def test_tick_opening_calls_check_open_fills(self):
         engine, router, om = make_engine()
-        router.open.return_value = True
+        router.open.return_value = _ok_result()
         legs = [TradeLeg(symbol="SYM-C", qty=0.1, side="buy")]
         trade = engine.create(legs=legs)
         trade.state = TradeState.OPENING
 
-        # Set up a mock fill manager
+        # Set up a mock fill manager returning FillResult
+        mock_leg = MagicMock(symbol="SYM-C", filled_qty=0.1, fill_price=100.0, order_id="1001")
         mock_mgr = MagicMock()
-        mock_mgr.check.return_value = "filled"
-        mock_mgr.filled_legs = [MagicMock(filled_qty=0.1, fill_price=100.0, order_id="1001")]
+        mock_mgr.check.return_value = FillResult(
+            status=FillStatus.FILLED, legs=[], phase_index=1, phase_total=1,
+            phase_pricing="aggressive", elapsed_seconds=0.0, total_fees=None,
+        )
+        mock_mgr.legs = [mock_leg]
+        mock_mgr.has_skipped_legs = False
         trade.metadata["_open_fill_mgr"] = mock_mgr
 
         engine.tick(make_account())
@@ -214,6 +237,7 @@ class TestTick:
 
     def test_tick_open_evaluates_exit_conditions(self):
         engine, router, om = make_engine()
+        router.close.return_value = _ok_result()
         exit_cond = MagicMock(return_value=True)
         exit_cond.__name__ = "test_exit"
         legs = [TradeLeg(symbol="SYM-C", qty=0.1, side="buy")]
@@ -229,7 +253,7 @@ class TestTick:
 
     def test_tick_pending_close_places_close_orders(self):
         engine, router, om = make_engine()
-        router.close.return_value = True
+        router.close.return_value = _ok_result()
         legs = [TradeLeg(symbol="SYM-C", qty=0.1, side="buy")]
         trade = engine.create(legs=legs)
         trade.state = TradeState.PENDING_CLOSE
@@ -255,12 +279,14 @@ class TestTick:
         trade.state = TradeState.CLOSING
         trade.opened_at = time.time()
 
+        mock_leg = MagicMock(symbol="SYM-C", filled_qty=0.1, fill_price=105.0, order_id="2001")
         mock_mgr = MagicMock()
-        mock_mgr.check.return_value = "filled"
+        mock_mgr.check.return_value = FillResult(
+            status=FillStatus.FILLED, legs=[], phase_index=1, phase_total=1,
+            phase_pricing="aggressive", elapsed_seconds=0.0, total_fees=None,
+        )
         mock_mgr.has_skipped_legs = False
-        mock_mgr.filled_legs = [MagicMock(
-            symbol="SYM-C", filled_qty=0.1, fill_price=105.0, order_id="2001"
-        )]
+        mock_mgr.legs = [mock_leg]
         mock_mgr.skipped_symbols = []
         trade.close_legs = [TradeLeg(symbol="SYM-C", qty=0.1, side="sell")]
         trade.metadata["_close_fill_mgr"] = mock_mgr

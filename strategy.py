@@ -46,6 +46,7 @@ Usage:
 """
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -53,8 +54,9 @@ from typing import Any, Callable, Dict, List, Optional
 
 from account_manager import AccountSnapshot, PositionMonitor
 from exchanges import build_exchange
+from execution.currency import Currency
+from execution.profiles import ExecutionProfile, get_profile, load_profiles
 from option_selection import LegSpec, resolve_legs
-from trade_execution import ExecutionParams, ExecutionPhase
 from lifecycle_engine import LifecycleEngine
 from trade_lifecycle import (
     ExitCondition,
@@ -87,6 +89,7 @@ class TradingContext:
     position_monitor: PositionMonitor
     lifecycle_manager: LifecycleEngine
     persistence: Optional[Any] = None   # TradeStatePersistence (optional)
+    profiles: Dict[str, ExecutionProfile] = field(default_factory=dict)
 
 
 def build_context(
@@ -114,10 +117,18 @@ def build_context(
         rfq_executor=rfq_executor,
         market_data=market_data_svc,
         exchange_state_map=state_map,
+        expected_denomination=Currency.BTC,
     )
 
     # Wire lifecycle ticks to position monitor
     monitor.on_update(lifecycle_mgr.tick)
+
+    # Load execution profiles from TOML
+    try:
+        profiles = load_profiles()
+    except FileNotFoundError:
+        logger.warning("execution_profiles.toml not found — no profiles loaded")
+        profiles = {}
 
     return TradingContext(
         auth=auth,
@@ -127,6 +138,7 @@ def build_context(
         account_manager=account_mgr,
         position_monitor=monitor,
         lifecycle_manager=lifecycle_mgr,
+        profiles=profiles,
     )
 
 
@@ -530,7 +542,8 @@ class StrategyConfig:
     entry_conditions: List[EntryCondition] = field(default_factory=list)
     exit_conditions: List[ExitCondition] = field(default_factory=list)
     execution_mode: str = "auto"
-    execution_params: Optional[ExecutionParams] = None
+    execution_params: Optional[Any] = None  # legacy ExecutionParams (unused by new profiles)
+    execution_profile: Optional[str] = None
     rfq_params: Optional[RFQParams] = None
     rfq_action: str = "buy"
     max_concurrent_trades: int = 1
@@ -568,6 +581,27 @@ class StrategyRunner:
         self._enabled: bool = True
         self._known_closed_ids: set = set()   # tracks already-handled closed trades
         self._known_open_ids: set = set()     # tracks already-handled opened trades
+
+        # Apply per-slot execution profile override from env
+        env_profile = os.environ.get("EXECUTION_PROFILE")
+        if env_profile:
+            self.config.execution_profile = env_profile
+
+        # Collect per-slot execution overrides from EXECUTION_OVERRIDE_* env vars
+        env_overrides = {}
+        prefix = "EXECUTION_OVERRIDE_"
+        for key, val in os.environ.items():
+            if key.startswith(prefix):
+                override_key = key[len(prefix):]
+                try:
+                    env_overrides[override_key] = float(val)
+                except ValueError:
+                    env_overrides[override_key] = val
+        if env_overrides:
+            existing = self.config.metadata.get("execution_overrides", {})
+            existing.update(env_overrides)
+            self.config.metadata["execution_overrides"] = existing
+
         logger.info(
             f"StrategyRunner '{config.name}' initialised "
             f"(max_trades={config.max_concurrent_trades}, "
@@ -733,6 +767,16 @@ class StrategyRunner:
                 strategy_id=self._strategy_id,
                 metadata={"strategy": self._strategy_id, **self.config.metadata},
             )
+
+            # Resolve named execution profile → stash on trade for Router
+            if self.config.execution_profile:
+                profile = get_profile(
+                    self.config.execution_profile, self.ctx.profiles,
+                )
+                overrides = self.config.metadata.get("execution_overrides")
+                if overrides:
+                    profile = profile.apply_overrides(overrides)
+                trade.metadata["_execution_profile"] = profile
 
             logger.info(f"[{self._strategy_id}] opening trade {trade.id}")
             self.ctx.lifecycle_manager.open(trade.id)

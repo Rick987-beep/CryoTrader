@@ -1,0 +1,143 @@
+# execution_profiles.toml — Named execution profiles for CryoTrader
+#
+# All prices in this file are in the exchange's native denomination:
+#   Deribit  → BTC
+#   Coincall → USD
+#
+# Profiles are loaded by execution/profiles.py.  Strategies reference
+# profiles by name; per-slot TOML overrides can patch individual fields.
+#
+# Phases are numbered: open_phase_1, open_phase_2, ... (executed in order).
+# This makes it clear which phase you're editing.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# passive_open_3phase — put_sell_80dte open
+# ─────────────────────────────────────────────────────────────────────────────
+[profile.passive_open_3phase]
+open_atomic = true
+close_best_effort = true
+rfq_mode = "never"
+
+[profile.passive_open_3phase.open_phase_1]
+pricing = "fair"
+fair_aggression = 0.0
+duration_seconds = 45.0
+reprice_interval = 45.0
+
+[profile.passive_open_3phase.open_phase_2]
+pricing = "fair"
+fair_aggression = 0.67
+duration_seconds = 45.0
+reprice_interval = 45.0
+min_price_pct_of_fair = 0.83
+
+[profile.passive_open_3phase.open_phase_3]
+pricing = "fair"
+fair_aggression = 1.0
+duration_seconds = 60.0
+reprice_interval = 15.0
+min_price_pct_of_fair = 0.83
+
+[profile.passive_open_3phase.close_phase_1]
+pricing = "fair"
+fair_aggression = 0.0
+duration_seconds = 15.0
+reprice_interval = 15.0
+
+[profile.passive_open_3phase.close_phase_2]
+pricing = "fair"
+fair_aggression = 0.33
+duration_seconds = 15.0
+reprice_interval = 15.0
+
+[profile.passive_open_3phase.close_phase_3]
+pricing = "fair"
+fair_aggression = 1.0
+duration_seconds = 60.0
+reprice_interval = 15.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# delta_strangle_2phase — short_strangle_delta_tp open/close
+# ─────────────────────────────────────────────────────────────────────────────
+[profile.delta_strangle_2phase]
+open_atomic = true
+close_best_effort = true
+rfq_mode = "never"
+
+[profile.delta_strangle_2phase.open_phase_1]
+pricing = "fair"
+fair_aggression = 0.0
+duration_seconds = 30.0
+reprice_interval = 30.0
+
+[profile.delta_strangle_2phase.open_phase_2]
+pricing = "fair"
+fair_aggression = 1.0
+duration_seconds = 30.0
+reprice_interval = 15.0
+
+[profile.delta_strangle_2phase.close_phase_1]
+pricing = "fair"
+fair_aggression = 0.0
+duration_seconds = 30.0
+reprice_interval = 30.0
+
+[profile.delta_strangle_2phase.close_phase_2]
+pricing = "fair"
+fair_aggression = 1.0
+duration_seconds = 60.0
+reprice_interval = 15.0
+min_floor_price = 0.0001
+
+# ─────────────────────────────────────────────────────────────────────────────
+# aggressive_2phase — long_strangle_index_move (2-phase open; 3-phase close)
+# ─────────────────────────────────────────────────────────────────────────────
+[profile.aggressive_2phase]
+open_atomic = true
+close_best_effort = true
+rfq_mode = "never"
+
+[profile.aggressive_2phase.open_phase_1]
+pricing = "aggressive"
+duration_seconds = 30.0
+buffer_pct = 2.0
+reprice_interval = 30.0
+
+[profile.aggressive_2phase.open_phase_2]
+pricing = "aggressive"
+duration_seconds = 30.0
+buffer_pct = 3.0
+reprice_interval = 15.0
+
+[profile.aggressive_2phase.close_phase_1]
+pricing = "fair"
+fair_aggression = 0.0
+duration_seconds = 30.0
+reprice_interval = 30.0
+
+[profile.aggressive_2phase.close_phase_2]
+pricing = "aggressive"
+duration_seconds = 180.0
+buffer_pct = 2.0
+reprice_interval = 30.0
+
+[profile.aggressive_2phase.close_phase_3]
+pricing = "fair"
+fair_aggression = 1.0
+duration_seconds = 14400.0
+reprice_interval = 60.0
+min_floor_price = 0.0001
+
+# ─────────────────────────────────────────────────────────────────────────────
+# max_hold_close_1phase — short_strangle_delta_tp max-hold close override
+# ─────────────────────────────────────────────────────────────────────────────
+[profile.max_hold_close_1phase]
+open_atomic = true
+close_best_effort = true
+rfq_mode = "never"
+
+[profile.max_hold_close_1phase.close_phase_1]
+pricing = "fair"
+fair_aggression = 1.0
+duration_seconds = 30.0
+reprice_interval = 15.0

@@ -48,7 +48,7 @@ from strategy import (
     time_window,
     weekday_filter,
 )
-from trade_execution import ExecutionParams, ExecutionPhase
+from execution.profiles import get_profile
 from trade_lifecycle import RFQParams
 from telegram_notifier import get_notifier
 
@@ -221,7 +221,6 @@ def _combined_sl():
             trade.execution_mode = "limit"
             trade.metadata["sl_triggered"]    = True
             trade.metadata["sl_triggered_at"] = time.time()
-            trade.execution_params = _CLOSE_PARAMS
 
         return triggered
 
@@ -297,7 +296,6 @@ def _combined_tp():
             trade.execution_mode = "limit"
             trade.metadata["tp_triggered"]    = True
             trade.metadata["tp_triggered_at"] = time.time()
-            trade.execution_params = _CLOSE_PARAMS
 
         return triggered
 
@@ -334,14 +332,11 @@ def _on_trade_opened(trade, account):
         trade.metadata["sl_threshold"]    = sl_threshold
         trade.metadata["combined_premium"] = combined_premium
 
-    # Configure max-hold close execution (aggressive single phase)
-    trade.execution_params = ExecutionParams(phases=[
-        ExecutionPhase(
-            pricing="fair", fair_aggression=1.0,
-            duration_seconds=HOLD_CLOSE_AGG_SECONDS,
-            reprice_interval=15,
-        ),
-    ])
+    # Configure max-hold close execution — override profile for max-hold exit.
+    # SL/TP exits use the profile's standard close_phases (from delta_strangle_2phase).
+    # Max-hold exit uses a dedicated 1-phase aggressive close profile.
+    _max_hold_profile = get_profile("max_hold_close_1phase")
+    trade.metadata["_max_hold_close_profile"] = _max_hold_profile
 
     duration_s = int(trade.opened_at - trade.created_at) if trade.opened_at and trade.created_at else 0
     phase_label = "Phase 1 (at fair)" if duration_s <= LIMIT_OPEN_FAIR_SECONDS else "Phase 2 (at bid)"
@@ -446,6 +441,13 @@ def _on_trade_closed(trade, account):
 
     structure = _structure_label()
 
+    # Fee data from FillResult (captured by LifecycleEngine)
+    open_fees = float(trade.open_fees) if trade.open_fees else 0.0
+    close_fees = float(trade.close_fees) if trade.close_fees else 0.0
+    total_fees = open_fees + close_fees
+    net_pnl = pnl - total_fees
+    net_pnl_usd = net_pnl * idx
+
     try:
         detail_line = ""
         if trade.metadata.get("tp_triggered"):
@@ -460,6 +462,13 @@ def _on_trade_closed(trade, account):
                 f"Fair now: {combined_fair_now:.4f} BTC (${combined_fair_now * idx:,.2f})\n"
             )
 
+        fee_line = ""
+        if total_fees > 0:
+            fee_line = (
+                f"\nFees: {total_fees:.6f} BTC (${total_fees * idx:,.2f})  "
+                f"[open {open_fees:.6f} + close {close_fees:.6f}]\n"
+            )
+
         get_notifier().send(
             f"{emoji} <b>Short {structure.title()} — Trade Closed</b>\n\n"
             f"Time: {ts}  |  BTC: ${idx:,.0f}\n"
@@ -469,53 +478,48 @@ def _on_trade_closed(trade, account):
             f"\nOpen:  CALL {call_fill_open:.4f} BTC  PUT {put_fill_open:.4f} BTC  "
             f"\u2192  {combined_premium:.4f} BTC (${combined_premium * idx:,.2f})\n"
             f"Close: CALL {call_fill_close:.4f} BTC  PUT {put_fill_close:.4f} BTC  "
-            f"\u2192  {combined_close:.4f} BTC (${combined_close * idx:,.2f})\n\n"
-            f"PnL: <b>${pnl_usd:+.2f}</b>  ({roi:+.1f}%)\n"
+            f"\u2192  {combined_close:.4f} BTC (${combined_close * idx:,.2f})\n"
+            f"{fee_line}"
+            f"\nGross PnL: ${pnl_usd:+.2f}  ({roi:+.1f}%)\n"
+            f"Net PnL: <b>${net_pnl_usd:+.2f}</b>\n"
             f"Equity: ${account.equity:,.2f}"
         )
     except Exception:
         pass
 
 
-# ─── Execution Params ────────────────────────────────────────────────────────
+# ─── Exit Condition: Max Hold with Profile Override ─────────────────────────
 
-# Open: Phase 1 (30s) at fair, Phase 2 (30s) aggressive at bid.
-_OPEN_PARAMS = ExecutionParams(phases=[
-    ExecutionPhase(
-        pricing="fair", fair_aggression=0.0,
-        duration_seconds=LIMIT_OPEN_FAIR_SECONDS,
-        reprice_interval=LIMIT_OPEN_FAIR_SECONDS,
-    ),
-    ExecutionPhase(
-        pricing="fair", fair_aggression=1.0,
-        duration_seconds=LIMIT_OPEN_AGG_SECONDS,
-        reprice_interval=15,
-    ),
-])
+def _max_hold_close():
+    """
+    Exit condition: max hold timer with close profile override.
 
-# Close (SL/TP): Phase 1 (30s) passive at fair, then Phase 2 (60s) aggressive at ask.
-# Phase 2 carries min_floor_price = 0.0001 BTC (Deribit minimum tick, ≈$7.50 at
-# current prices) to handle legs that become completely worthless near expiry
-# (bid = ask = mark = 0).  Without this floor, a zero-priced leg produces no valid
-# price, is silently skipped by best_effort close logic, and is never formally marked
-# closed in the trade snapshot.  At minimum tick the order fills immediately if any
-# counter-party is present, and the cost is negligible relative to the trade size.
-_CLOSE_PARAMS = ExecutionParams(phases=[
-    ExecutionPhase(
-        pricing="fair", fair_aggression=0.0,
-        duration_seconds=CLOSE_FAIR_SECONDS,
-        reprice_interval=CLOSE_FAIR_SECONDS,
-    ),
-    ExecutionPhase(
-        pricing="fair", fair_aggression=1.0,
-        duration_seconds=CLOSE_AGG_SECONDS,
-        reprice_interval=15,
-        # Last-resort floor: place at minimum Deribit tick when the book is
-        # completely empty (worthless near-expiry leg).  Only activates when no
-        # valid price can be computed; never overrides a real bid/ask price.
-        min_floor_price=0.0001,
-    ),
-])
+    Same as strategy.max_hold_hours() but also swaps the execution profile
+    to max_hold_close_1phase (single aggressive phase) for faster close.
+    """
+    if MAX_HOLD_HOURS <= 0:
+        def _noop(account, trade):
+            return False
+        _noop.__name__ = "max_hold_close(disabled)"
+        return _noop
+
+    label = f"max_hold_close({MAX_HOLD_HOURS}h)"
+
+    def _check(account, trade):
+        hold = trade.hold_seconds
+        if hold is None:
+            return False
+        triggered = hold >= MAX_HOLD_HOURS * 3600
+        if triggered:
+            logger.info(f"[{trade.id}] {label} triggered: held {hold/3600:.1f}h")
+            # Swap to aggressive 1-phase close profile
+            max_hold_profile = trade.metadata.get("_max_hold_close_profile")
+            if max_hold_profile:
+                trade.metadata["_execution_profile"] = max_hold_profile
+        return triggered
+
+    _check.__name__ = label
+    return _check
 
 
 # ─── Strategy Factory ────────────────────────────────────────────────────────
@@ -529,7 +533,7 @@ def short_strangle_delta_tp() -> StrategyConfig:
     """
     exit_conditions = [_combined_tp(), _combined_sl()]
     if MAX_HOLD_HOURS > 0:
-        exit_conditions.append(max_hold_hours(MAX_HOLD_HOURS))
+        exit_conditions.append(_max_hold_close())
 
     return StrategyConfig(
         name="short_strangle_delta_tp",
@@ -557,7 +561,7 @@ def short_strangle_delta_tp() -> StrategyConfig:
 
         # ── How to execute ────────────────────────────────────────────
         execution_mode="limit",
-        execution_params=_OPEN_PARAMS,
+        execution_profile="delta_strangle_2phase",
 
         # RFQ fallback for emergency manual closes only
         rfq_params=RFQParams(

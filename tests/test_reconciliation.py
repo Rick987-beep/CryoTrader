@@ -46,7 +46,7 @@ def make_order(order_id, status=OrderStatus.LIVE, **kwargs):
 class TestReconciliationWiring(unittest.TestCase):
     def _make_engine(self):
         with patch("lifecycle_engine.OrderManager") as MockOM, \
-             patch("lifecycle_engine.ExecutionRouter"):
+             patch("lifecycle_engine.Router"):
             mock_am = MagicMock()
             engine = LifecycleEngine(account_manager=mock_am)
             engine._order_manager.poll_all = MagicMock()
@@ -79,7 +79,7 @@ class TestReconciliationWiring(unittest.TestCase):
 
     def test_skipped_without_account_manager(self):
         with patch("lifecycle_engine.OrderManager"), \
-             patch("lifecycle_engine.ExecutionRouter"):
+             patch("lifecycle_engine.Router"):
             engine = LifecycleEngine(account_manager=None)
             engine._order_manager.poll_all = MagicMock()
             engine._order_manager.persist_snapshot = MagicMock()
@@ -95,7 +95,7 @@ class TestReconciliationWiring(unittest.TestCase):
 class TestReconciliationLogic(unittest.TestCase):
     def _make_engine_with_orders(self, ledger_orders=None, exchange_orders=None):
         with patch("lifecycle_engine.OrderManager"), \
-             patch("lifecycle_engine.ExecutionRouter"):
+             patch("lifecycle_engine.Router"):
             mock_am = MagicMock()
             mock_am.get_open_orders.return_value = exchange_orders or []
             mock_executor = MagicMock()
@@ -147,7 +147,7 @@ class TestReconciliationLogic(unittest.TestCase):
 
     def test_survives_api_error(self):
         with patch("lifecycle_engine.OrderManager"), \
-             patch("lifecycle_engine.ExecutionRouter"):
+             patch("lifecycle_engine.Router"):
             mock_am = MagicMock()
             mock_am.get_open_orders.side_effect = Exception("API timeout")
             engine = LifecycleEngine(account_manager=mock_am)
@@ -201,13 +201,13 @@ class TestTelegramReconciliationAlerts(unittest.TestCase):
 class TestEngineAccountManager(unittest.TestCase):
     def test_default_no_account_manager(self):
         with patch("lifecycle_engine.OrderManager"), \
-             patch("lifecycle_engine.ExecutionRouter"):
+             patch("lifecycle_engine.Router"):
             engine = LifecycleEngine()
         self.assertIsNone(engine._account_manager)
 
     def test_with_account_manager(self):
         mock_am = MagicMock()
         with patch("lifecycle_engine.OrderManager"), \
-             patch("lifecycle_engine.ExecutionRouter"):
+             patch("lifecycle_engine.Router"):
             engine = LifecycleEngine(account_manager=mock_am)
         self.assertIs(engine._account_manager, mock_am)

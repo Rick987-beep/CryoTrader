@@ -115,6 +115,21 @@ def generate_env(slot_id: str, slot_config: dict, account: dict,
         for key, value in params.items():
             lines.append(f"PARAM_{key.upper()}={value}")
 
+    # Execution profile override
+    exec_profile = slot_config.get("execution_profile")
+    if exec_profile:
+        lines.append("")
+        lines.append("# Execution profile override")
+        lines.append(f"EXECUTION_PROFILE={exec_profile}")
+
+    # Per-phase execution overrides
+    exec_overrides = slot_config.get("execution_overrides", {})
+    if exec_overrides:
+        lines.append("")
+        lines.append("# Execution profile field overrides")
+        for key, value in exec_overrides.items():
+            lines.append(f"EXECUTION_OVERRIDE_{key}={value}")
+
     lines.append("")
     return "\n".join(lines)
 

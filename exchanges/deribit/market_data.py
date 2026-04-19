@@ -169,7 +169,8 @@ class DeribitMarketDataAdapter(ExchangeMarketData):
             # LimitFillManager always prefers this field over 'mark'.
             "_mark_btc": float(ob.get("mark_price", 0)),
             # '_index_price' is the BTC/USD spot rate at snapshot time.
-            # Available for USD↔BTC conversion and the BTC plausibility guard
-            # in LimitFillManager._get_phased_price().
+            # Available for USD↔BTC conversion and denomination validation.
             "_index_price": index_price,
+            # '_currency' explicit denomination tag for type-safe Price construction.
+            "_currency": "BTC",
         }

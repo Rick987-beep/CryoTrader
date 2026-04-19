@@ -177,7 +177,7 @@ class TelegramNotifier:
         legs_text = ""
         if close_legs:
             legs_text = "\n" + "\n".join(
-                f"  {leg.side.upper()} {leg.filled_qty}× {leg.symbol} @ ${leg.fill_price}"
+                f"  {leg.side.upper()} {leg.filled_qty}× {leg.symbol} @ {float(leg.fill_price) if leg.fill_price is not None else '?'}"
                 for leg in close_legs
             ) + "\n"
         self.send(

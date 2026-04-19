@@ -58,7 +58,6 @@ from strategy import (
     StrategyConfig,
     time_window,
 )
-from trade_execution import ExecutionParams, ExecutionPhase
 from trade_lifecycle import RFQParams
 from telegram_notifier import get_notifier
 
@@ -144,29 +143,6 @@ def get_option_prices(symbol: str) -> Optional[dict]:
     }
 
 
-# ─── Phased Close Params ────────────────────────────────────────────────────
-
-def _phased_close_params(fair_s: int, step_s: int, agg_s: int) -> ExecutionParams:
-    """Standard phased limit buy-to-close: fair → stepped → aggressive at ask."""
-    return ExecutionParams(phases=[
-        ExecutionPhase(
-            pricing="fair", fair_aggression=0.0,
-            duration_seconds=fair_s,
-            reprice_interval=fair_s,
-        ),
-        ExecutionPhase(
-            pricing="fair", fair_aggression=0.33,
-            duration_seconds=step_s,
-            reprice_interval=step_s,
-        ),
-        ExecutionPhase(
-            pricing="fair", fair_aggression=1.0,
-            duration_seconds=agg_s,
-            reprice_interval=15,
-        ),
-    ])
-
-
 # ─── Exit Condition: Take Profit ────────────────────────────────────────────
 # For a short put, we profit when the option price falls (time decay / BTC rises).
 # TP fires when mid price drops to fill_price × (1 - TAKE_PROFIT_PCT/100),
@@ -208,9 +184,6 @@ def _mid_price_tp():
             trade.execution_mode = "limit"
             trade.metadata["tp_triggered"]    = True
             trade.metadata["tp_triggered_at"] = time.time()
-            trade.execution_params = _phased_close_params(
-                TP_CLOSE_FAIR_SECONDS, TP_CLOSE_STEP_SECONDS, TP_CLOSE_AGG_SECONDS
-            )
 
         return triggered
 
@@ -262,9 +235,6 @@ def _mid_price_sl():
             trade.execution_mode = "limit"
             trade.metadata["sl_triggered"]    = True
             trade.metadata["sl_triggered_at"] = time.time()
-            trade.execution_params = _phased_close_params(
-                SL_CLOSE_FAIR_SECONDS, SL_CLOSE_STEP_SECONDS, SL_CLOSE_AGG_SECONDS
-            )
 
         return triggered
 
@@ -463,8 +433,22 @@ def _on_trade_closed(trade, account) -> None:
     close_index = get_btc_index_price(use_cache=False)
     idx_text    = f"BTC index: ${close_index:,.0f}" if close_index else "BTC index: N/A"
 
+    # Fee data from FillResult (captured by LifecycleEngine)
+    open_fees = float(trade.open_fees) if trade.open_fees else 0.0
+    close_fees = float(trade.close_fees) if trade.close_fees else 0.0
+    total_fees = open_fees + close_fees
+    net_pnl = pnl - total_fees
+    idx_for_fees = close_index or 0.0
+
     try:
         close_exec_line = f"{close_exec}\n" if close_exec else ""
+        fee_line = ""
+        if total_fees > 0:
+            fee_line = (
+                f"\nFees: {total_fees:.6f} (${total_fees * idx_for_fees:,.2f})  "
+                f"[open {open_fees:.6f} + close {close_fees:.6f}]\n"
+            )
+
         get_notifier().send(
             f"{emoji} <b>Put Sell 80 DTE — Trade Closed</b>\n\n"
             f"Time: {ts}\n"
@@ -472,7 +456,9 @@ def _on_trade_closed(trade, account) -> None:
             f"BUY {close_qty}\u00d7 {close_symbol}\n"
             f"{trigger_text}\n"
             f"{close_exec_line}"
-            f"\nPnL: <b>${pnl:+.2f}</b> ({roi:+.1f}%)\n"
+            f"\nGross PnL: ${pnl:+.2f} ({roi:+.1f}%)\n"
+            f"{fee_line}"
+            f"Net PnL: <b>${net_pnl:+.2f}</b>\n"
             f"Hold: {hold_seconds/3600:.1f}h\n"
             f"{price_text}"
             f"{fill_vs_mid}\n\n"
@@ -534,25 +520,7 @@ def put_sell_80dte() -> StrategyConfig:
             fallback_mode="limit",
         ),
 
-        execution_params=ExecutionParams(phases=[
-            ExecutionPhase(
-                pricing="fair", fair_aggression=0.0,
-                duration_seconds=LIMIT_OPEN_FAIR_SECONDS,
-                reprice_interval=LIMIT_OPEN_FAIR_SECONDS,
-            ),
-            ExecutionPhase(
-                pricing="fair", fair_aggression=0.67,
-                duration_seconds=LIMIT_OPEN_PARTIAL_SECONDS,
-                reprice_interval=LIMIT_OPEN_PARTIAL_SECONDS,
-                min_price_pct_of_fair=1.0 - MIN_BID_DISCOUNT_PCT / 100.0,
-            ),
-            ExecutionPhase(
-                pricing="fair", fair_aggression=1.0,
-                duration_seconds=LIMIT_OPEN_BID_SECONDS,
-                reprice_interval=15,
-                min_price_pct_of_fair=1.0 - MIN_BID_DISCOUNT_PCT / 100.0,
-            ),
-        ]),
+        execution_profile="passive_open_3phase",
 
         # ── Operational limits ───────────────────────────────────────
         max_concurrent_trades=MAX_CONCURRENT,

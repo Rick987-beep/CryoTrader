@@ -407,6 +407,8 @@ class MarketData:
                         mark = details.get('markPrice', 0)
                         if mark:
                             depth['mark'] = float(mark)
+                # Explicit denomination tag for type-safe Price construction
+                depth['_currency'] = 'USD'
                 return depth
             else:
                 logger.error(f"Failed to get orderbook for {symbol}: {response.get('msg')}")

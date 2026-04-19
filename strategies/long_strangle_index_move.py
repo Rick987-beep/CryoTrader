@@ -41,7 +41,6 @@ from strategy import (
     # Exit conditions
     time_exit,
 )
-from trade_execution import ExecutionParams, ExecutionPhase
 from telegram_notifier import get_notifier
 
 logger = logging.getLogger(__name__)
@@ -127,13 +126,7 @@ def index_move_distance(distance_usd):
     return _check
 
 
-# ─── Fee Helper ─────────────────────────────────────────────────────────────
-
-def _leg_fee_btc(fill_price_btc: float, qty: float) -> float:
-    """Deribit fee per leg: min(0.03% of underlying, 12.5% of option price) × qty.
-    Inputs are in BTC (Deribit native). 0.03% of underlying = 0.0003 BTC per contract.
-    """
-    return min(0.0003, 0.125 * fill_price_btc) * qty
+# ─── Helpers ────────────────────────────────────────────────────────────────
 
 
 def _btc_usd(btc: float, index: float) -> str:
@@ -155,31 +148,12 @@ def _on_trade_opened(trade, account) -> None:
     else:
         logger.warning("[Long Strangle] Could not capture entry index price!")
 
-    # Set phased close execution params now that the trade is open.
+    # Close execution is handled by the aggressive_2phase profile's close_phases:
     # Phase 1 (30s):   fair price — fast fill on the profitable leg
     # Phase 2 (180s):  aggressive — ensures the in-the-money leg closes
-    # Phase 3 (24h+):  fair price with 0.0001 BTC floor — handles deep-OTM
+    # Phase 3 (4h):    fair price with 0.0001 BTC floor — handles deep-OTM
     #                  leg that may have little/no bids; expires worthless
     #                  if never filled, which is an acceptable outcome
-    trade.execution_params = ExecutionParams(phases=[
-        ExecutionPhase(
-            pricing="fair",
-            duration_seconds=30,
-            reprice_interval=30,
-        ),
-        ExecutionPhase(
-            pricing="aggressive",
-            duration_seconds=180,
-            buffer_pct=2.0,
-            reprice_interval=30,
-        ),
-        ExecutionPhase(
-            pricing="fair",
-            duration_seconds=4 * 3600,  # 4h — covers until ~23:00 UTC at latest,
-            reprice_interval=60,        # clear of 08:00 UTC expiry and next day's cycle
-            min_floor_price=0.0001,     # fallback for deep-OTM leg with no bids
-        ),
-    ])
 
     ts = datetime.now(timezone.utc).strftime("%H:%M UTC")
     idx = index_price or 0.0
@@ -187,20 +161,18 @@ def _on_trade_opened(trade, account) -> None:
     # Per-leg cost and fees
     legs_text = ""
     total_entry_btc = 0.0
-    total_entry_fees_btc = 0.0
     for leg in trade.open_legs:
         fp = leg.fill_price
         qty = leg.filled_qty if leg.filled_qty > 0 else leg.qty
         if fp is not None:
-            cost_btc = fp * qty
-            fee_btc = _leg_fee_btc(fp, qty)
+            cost_btc = float(fp) * qty
             total_entry_btc += cost_btc
-            total_entry_fees_btc += fee_btc
             cost_str = _btc_usd(cost_btc, idx) if idx else f"{cost_btc:.6f} BTC"
-            legs_text += f"  {leg.side.upper()} {qty}× {leg.symbol}  {cost_str}\n"
+            legs_text += f"  {leg.side.upper()} {qty}\u00d7 {leg.symbol}  {cost_str}\n"
         else:
-            legs_text += f"  {leg.side.upper()} {qty}× {leg.symbol}\n"
+            legs_text += f"  {leg.side.upper()} {qty}\u00d7 {leg.symbol}\n"
 
+    total_entry_fees_btc = float(trade.open_fees) if trade.open_fees else 0.0
     total_outlay_btc = total_entry_btc + total_entry_fees_btc
 
     try:
@@ -233,31 +205,28 @@ def _on_trade_closed(trade, account) -> None:
     # ── Entry side (always priced in entry_index for accuracy) ───────────────
     entry_idx = entry_index or ref
     total_entry_btc = 0.0
-    total_entry_fees_btc = 0.0
     for leg in trade.open_legs:
         fp = leg.fill_price
         qty = leg.filled_qty if leg.filled_qty > 0 else leg.qty
         if fp is not None:
-            total_entry_btc += fp * qty
-            total_entry_fees_btc += _leg_fee_btc(fp, qty)
+            total_entry_btc += float(fp) * qty
+    total_entry_fees_btc = float(trade.open_fees) if trade.open_fees else 0.0
     total_outlay_btc = total_entry_btc + total_entry_fees_btc
 
     # ── Exit side ────────────────────────────────────────────────────────────
     legs_text = ""
     total_exit_btc = 0.0
-    total_exit_fees_btc = 0.0
     for leg in (trade.close_legs or []):
         fp = leg.fill_price
         qty = leg.filled_qty if leg.filled_qty > 0 else leg.qty
         if fp is not None:
-            proceeds_btc = fp * qty
-            fee_btc = _leg_fee_btc(fp, qty)
+            proceeds_btc = float(fp) * qty
             total_exit_btc += proceeds_btc
-            total_exit_fees_btc += fee_btc
             proc_str = _btc_usd(proceeds_btc, ref) if ref else f"{proceeds_btc:.6f} BTC"
             legs_text += f"  {leg.side.upper()} {qty}× {leg.symbol}  {proc_str}\n"
         else:
             legs_text += f"  {leg.side.upper()} {qty}× {leg.symbol}\n"
+    total_exit_fees_btc = float(trade.close_fees) if trade.close_fees else 0.0
     net_proceeds_btc = total_exit_btc - total_exit_fees_btc
 
     # ── PnL ──────────────────────────────────────────────────────────────────
@@ -364,6 +333,7 @@ def long_strangle_index_move() -> StrategyConfig:
 
         # ── How to execute ───────────────────────────────────────────────
         execution_mode="limit",
+        execution_profile="aggressive_2phase",
 
         # ── Operational limits ───────────────────────────────────────────
         max_concurrent_trades=1,

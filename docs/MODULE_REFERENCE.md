@@ -1,10 +1,9 @@
 # CryoTrader — Module Reference
 
-**Last Updated:** March 23, 2026
+**Last Updated:** April 19, 2026
 
 Internal documentation for the CryoTrader application modules.
-For Coincall exchange API endpoints, see [API_REFERENCE.md](API_REFERENCE.md).
-For the Deribit migration plan and API field reference, see [MIGRATION_PLAN_DERIBIT.md](MIGRATION_PLAN_DERIBIT.md).
+For exchange API endpoints, see [API_REFERENCE.md](API_REFERENCE.md).
 
 ---
 
@@ -290,9 +289,8 @@ Automated daily OTM put selling strategy with EMA-20 trend filter.
 
 ### Strategy Logic
 1. **Entry:** Sell 1–2 DTE BTC put at -0.10 delta during 03:00–04:00 UTC, only when BTC > EMA-20
-2. **TP:** Proactive limit buy at 10% of entry premium (capture 90% of premium)
-3. **SL:** Exit at 70% mark-price loss via standard RFQ (15s timeout)
-4. **Expiry:** If neither fires, option expires worthless (full win)
+2. **SL:** Exit at 70% mark-price loss via limit-order execution
+3. **Expiry:** If SL doesn't fire, option expires worthless (full win)
 
 ### Parameters (module-level constants)
 | Parameter | Default | Description |
@@ -303,28 +301,13 @@ Automated daily OTM put selling strategy with EMA-20 trend filter.
 | `ENTRY_HOUR_START/END` | `3/4` | UTC entry window |
 | `MIN_MARGIN_PCT` | `20` | Minimum available margin % |
 | `STOP_LOSS_PCT` | `70` | Max loss % of entry premium |
-| `TP_CAPTURE_PCT` | `0.90` | TP = buy back at 10% of entry |
-| `RFQ_OPEN_TIMEOUT` | `300` | Phased RFQ open timeout (5min) |
-| `RFQ_INITIAL_WAIT` | `30` | Silent quote collection period |
-| `RFQ_MARK_FLOOR_PCT` | `2.2` | Phase 2 max deviation from mark |
-| `RFQ_CLOSE_TIMEOUT` | `15` | SL close RFQ timeout |
 
 ### Framework Features Used
 - `LegSpec` with delta-based strike selection
 - Entry: `time_window()`, `ema20_filter()`, `min_available_margin_pct()`
-- Exit: `max_loss(mark)`, custom `_tp_filled_exit()`
-- Execution: phased RFQ open, standard RFQ close, limit fallback
-- Callbacks: `on_trade_opened`, `on_trade_closed`, `on_runner_created`
+- Exit: `max_loss(mark)`
+- Execution: `passive_open_3phase` named profile from `execution_profiles.toml`
 - `max_concurrent_trades=2`, `max_trades_per_day=1`
-
-### RFQ Phased Execution
-The strategy uses phased RFQ for opening (via `execute_phased()` in `rfq.py`):
-- **Phase 1 (0–30s):** Collect quotes silently
-- **Phase 2 (30s–5min):** Accept if within 2.2% of orderbook baseline
-- **Phase 3 (5min+):** Accept any quote
-- **Fallback:** Limit order if RFQ fails
-
-Configured via `metadata` keys: `rfq_phased=True`, `rfq_initial_wait_seconds`, `rfq_mark_floor_pct`, `rfq_relax_after_seconds`.
 
 ---
 
@@ -332,46 +315,40 @@ Configured via `metadata` keys: `rfq_phased=True`, `rfq_initial_wait_seconds`, `
 
 See [trade_lifecycle.py](../trade_lifecycle.py) — pure data module containing dataclasses, enums, and PnL helpers. No state-machine logic.
 
-### Module Split (v1.0.0)
+### Module Architecture
 
 The original monolithic `trade_lifecycle.py` was split into three focused modules:
 
-| Module | Responsibility | Lines |
-|--------|---------------|-------|
-| `trade_lifecycle.py` | Data: `TradeState`, `TradeLeg`, `TradeLifecycle`, `RFQParams`, `ExitCondition`, PnL helpers | ~450 |
-| `lifecycle_engine.py` | State machine: `LifecycleEngine` (ticks, state transitions, creates router + order manager) | ~500 |
-| `execution_router.py` | Routing: `ExecutionRouter` (dispatches open/close to limit/rfq/smart executor) | ~400 |
+| Module | Responsibility |
+|--------|---------------|
+| `trade_lifecycle.py` | Data: `TradeState`, `TradeLeg`, `TradeLifecycle`, `RFQParams`, `ExitCondition`, PnL helpers |
+| `lifecycle_engine.py` | State machine: `LifecycleEngine` (ticks, state transitions, creates Router + OrderManager) |
+| `execution/` | Typed execution package: `Router`, `FillManager`, `PricingEngine`, `ExecutionProfile`, `Currency`/`Price` |
+| `execution_profiles.toml` | Named execution profiles (human-editable, numbered phases) |
 
-**Import path:** `from lifecycle_engine import LifecycleEngine`. The backward-compat `LifecycleManager` alias has been removed.
+**Import path:** `from lifecycle_engine import LifecycleEngine`
 
 ### Key Classes (trade_lifecycle.py)
 | Class | Purpose |
 |-------|---------|
 | `TradeState` | Enum: PENDING_OPEN → OPENING → OPEN → PENDING_CLOSE → CLOSING → CLOSED \| FAILED |
-| `TradeLeg` | Single leg: symbol, qty, side, order_id, fill_price, filled_qty |
-| `TradeLifecycle` | Groups legs with exit conditions; computes PnL, Greeks (pro-rated by our qty share). Optional `execution_params` and `rfq_params` typed fields. Serializable via `to_dict()/from_dict()`. |
+| `TradeLeg` | Single leg: symbol, qty, side, order_id, fill_price (`Price`), filled_qty |
+| `TradeLifecycle` | Groups legs with exit conditions; computes PnL, Greeks (pro-rated by our qty share). `currency` field auto-detected from fills. Serializable via `to_dict()/from_dict()`. |
 | `RFQParams` | Typed RFQ config: `timeout_seconds`, `min_improvement_pct`, `fallback_mode` |
 | `ExitCondition` | Named tuple: `(name, check_fn)` — callable `(AccountSnapshot, TradeLifecycle) → bool` |
 
 ### Key Classes (lifecycle_engine.py)
 | Class | Purpose |
 |-------|---------|
-| `LifecycleEngine` | State machine: `create()`, `open()`, `close()`, `tick()`, `force_close()`, `kill_all()`, `cancel()`, `restore_trade()`. Owns `ExecutionRouter` and `OrderManager`. Exposes `order_manager` property. |
-
-### Key Classes (execution_router.py)
-| Class | Purpose |
-|-------|---------|
-| `ExecutionRouter` | Routes open/close to correct executor (limit or rfq). Mode auto-detection by notional: single-leg → limit, multi-leg ≥$50k → rfq, else limit fallback. Close circuit breaker (10 attempts → FAILED). All close orders enforce `reduce_only=True`. |
+| `LifecycleEngine` | State machine: `create()`, `open()`, `close()`, `tick()`, `force_close()`, `kill_all()`, `cancel()`, `restore_trade()`. Owns `Router` and `OrderManager`. Manages skipped-leg retries with configurable unwind. |
 
 ### Quick Start
 ```python
 from strategy import build_context, StrategyConfig, StrategyRunner
 from trade_lifecycle import profit_target, max_loss, max_hold_hours
 
-# build_context() creates LifecycleEngine (with OrderManager + ExecutionRouter) internally
 ctx = build_context()
 
-# Strategies interact via StrategyConfig — never touch LifecycleEngine directly
 config = StrategyConfig(
     name="example",
     legs=strangle(qty=0.01, side="buy"),
@@ -389,12 +366,12 @@ ctx.position_monitor.on_update(runner.tick)
 | `profit_target(pct)` | `float → Callable` | Close when structure PnL ≥ pct of entry cost |
 | `max_loss(pct)` | `float → Callable` | Close when structure loss ≥ pct of entry cost |
 | `max_hold_hours(hours)` | `float → Callable` | Close after N hours |
-| `time_exit(hour, minute)` | `int, int → Callable` | Close at or after a specific UTC wall-clock time (e.g., `time_exit(19, 0)`) |
-| `index_move_distance(usd)` | `float → Callable` | Close when BTC index moves ≥ $N from `trade.metadata["entry_index_price"]`. Forces fresh fetch (`use_cache=False`). Defined in `strategies/atm_straddle_index_move.py`. |
+| `time_exit(hour, minute)` | `int, int → Callable` | Close at specific UTC time |
+| `index_move_distance(usd)` | `float → Callable` | Close when BTC index moves ≥ $N from entry |
 | `utc_datetime_exit(dt)` | `datetime → Callable` | Close at or after a specific UTC datetime |
 | `account_delta_limit(thr)` | `float → Callable` | Close when account delta exceeds threshold |
 | `structure_delta_limit(thr)` | `float → Callable` | Close when structure delta exceeds threshold |
-| `leg_greek_limit(idx, greek, op, val)` | `... → Callable` | Close when a specific leg's Greek crosses a limit |
+| `leg_greek_limit(idx, greek, op, val)` | `... → Callable` | Close when a leg's Greek crosses a limit |
 
 ### Position Scaling
 The lifecycle tracks our filled quantity vs. the exchange's total position quantity:
@@ -404,19 +381,183 @@ The lifecycle tracks our filled quantity vs. the exchange's total position quant
 
 ---
 
+## Execution Package (`execution/`)
+
+Typed execution layer — replaces the legacy `ExecutionParams`/`LimitFillManager` system.
+
+### Package Structure
+
+| Module | Exports | Purpose |
+|--------|---------|---------|
+| `currency.py` | `Currency`, `Price`, `OrderbookSnapshot` | Type-safe currency primitives. `Price` is frozen, supports arithmetic, comparison, `to_usd()`/`to_btc()`. |
+| `pricing.py` | `PricingEngine`, `PricingResult` | Stateless order-price calculator. 6 pricing modes. No I/O. |
+| `profiles.py` | `PhaseConfig`, `ExecutionProfile`, `load_profiles()`, `get_profile()` | Declarative execution profiles. Loaded from TOML. Per-slot overrides via `apply_overrides()`. |
+| `fill_manager.py` | `FillManager` | N-leg fill lifecycle. Phase-aware repricing. Returns typed `FillResult`. |
+| `fill_result.py` | `FillStatus`, `LegFillSnapshot`, `FillResult` | Typed fill outcomes replacing bare strings/booleans. |
+| `fees.py` | `extract_fee()`, `sum_fees()` | Fee extraction from exchange trade records. |
+| `router.py` | `Router` | Routes open/close to limit (FillManager) or RFQ backend. Owned by LifecycleEngine. |
+
+### Currency & Price Types
+
+```python
+from execution.currency import Currency, Price
+
+p = Price(0.0045, Currency.BTC)
+usd = p.to_usd(index_price=85000)  # Price(382.50, Currency.USD)
+
+# Arithmetic
+total = p + Price(0.001, Currency.BTC)  # Price(0.0055, Currency.BTC)
+# Cross-currency raises DenominationError
+```
+
+### Execution Profiles
+
+Profiles define phased order-placement strategies. Loaded from `execution_profiles.toml`:
+
+```toml
+[profile.passive_open_3phase]
+open_atomic = true
+close_best_effort = true
+
+[profile.passive_open_3phase.open_phase_1]
+pricing = "fair"
+fair_aggression = 0.0
+duration_seconds = 45.0
+
+[profile.passive_open_3phase.open_phase_2]
+pricing = "fair"
+fair_aggression = 0.67
+duration_seconds = 45.0
+
+[profile.passive_open_3phase.open_phase_3]
+pricing = "fair"
+fair_aggression = 1.0
+duration_seconds = 60.0
+```
+
+Phases are numbered (`open_phase_1`, `open_phase_2`, ...) for human readability.
+
+```python
+from execution.profiles import load_profiles, get_profile
+
+profiles = load_profiles()                          # all profiles from TOML
+profile = get_profile("passive_open_3phase")        # single profile by name
+profile = profile.apply_overrides({                 # per-slot overrides
+    "open_phase_1.duration_seconds": 60,
+})
+```
+
+### PhaseConfig Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `pricing` | `str` | `"aggressive"` | `"fair"`, `"aggressive"`, `"mid"`, `"top_of_book"`, `"mark"`, `"passive"` |
+| `duration_seconds` | `float` | `30.0` | Phase duration (min 10s) |
+| `fair_aggression` | `float` | `0.0` | 0.0 = fair value, 1.0 = cross spread, blended |
+| `buffer_pct` | `float` | `2.0` | Buffer % for aggressive pricing |
+| `reprice_interval` | `float` | `30.0` | Seconds between reprices (min 10s) |
+| `min_price_pct_of_fair` | `float\|None` | `None` | Floor as % of fair value |
+| `min_floor_price` | `float\|None` | `None` | Absolute minimum price |
+
+### ExecutionProfile Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | `str` | — | Profile identifier |
+| `open_phases` | `List[PhaseConfig]` | `[]` | Phases for opening trades |
+| `close_phases` | `List[PhaseConfig]` | `[]` | Phases for closing trades |
+| `open_atomic` | `bool` | `True` | All legs or none on open |
+| `close_best_effort` | `bool` | `True` | Skip failed close legs, retry next tick |
+| `rfq_mode` | `str` | `"never"` | `"never"`, `"hybrid"`, `"always"` |
+| `max_open_retries` | `int` | `3` | Retries for skipped legs before unwind |
+
+### Pricing Modes
+
+| Mode | Buy Price | Sell Price | Use Case |
+|------|-----------|------------|----------|
+| `"fair"` | Blended fair↔ask by `fair_aggression` | Blended fair↔bid by `fair_aggression` | Default for most strategies |
+| `"aggressive"` | Best ask × (1 + buffer%) | Best bid × (1 - buffer%) | Cross spread; fastest fill |
+| `"mid"` | (bid+ask)/2 | (bid+ask)/2 | Balanced |
+| `"top_of_book"` | Best ask | Best bid | Match best available |
+| `"mark"` | Mark price | Mark price | Most patient |
+| `"passive"` | Best bid | Best ask | Join the queue; widest spread capture |
+
+### FillManager
+
+Created per open/close attempt by `Router`. Stored on `trade.metadata` so `LifecycleEngine.tick()` can call `check()` each tick.
+
+```python
+from execution.fill_manager import FillManager
+
+mgr = FillManager(
+    order_manager=om,
+    market_data=md,
+    profile=profile,        # ExecutionProfile
+    direction="open",       # or "close"
+)
+result = mgr.check()       # FillResult(status=FillStatus.FILLED, ...)
+```
+
+### FillResult
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | `FillStatus` | `PENDING`, `FILLED`, `REQUOTED`, `REFUSED`, `FAILED` |
+| `legs` | `List[LegFillSnapshot]` | Per-leg fill state (symbol, order_id, filled_qty, fill_price) |
+| `total_fees` | `Price\|None` | Summed fees across all legs |
+
+### Close-Order Safety
+
+- **`reduce_only`:** All close/unwind orders enforce `reduce_only=True` on the exchange API
+- **Atomic open / best-effort close:** Configurable via `open_atomic` / `close_best_effort`
+- **Skipped-leg retries:** If a leg is skipped on open (no orderbook, placement rejected), the engine retries up to `max_open_retries` with a fresh FillManager. On exhaustion, filled legs are unwound.
+- **Circuit breaker:** After `MAX_CLOSE_ATTEMPTS` the trade transitions to FAILED
+- **Unfilled-leg filter:** Close paths skip legs with `filled_qty == 0`
+
+### Named Profiles in `execution_profiles.toml`
+
+| Profile | Open Phases | Close Phases | Used By |
+|---------|-------------|--------------|---------|
+| `passive_open_3phase` | 3 (fair → fair+aggression → fair+full) | 3 (fair → fair+aggression → fair+full) | `put_sell_80dte` |
+| `delta_strangle_2phase` | 2 (fair → fair+full) | 2 (fair → fair+full) | `short_strangle_delta_tp` |
+| `aggressive_2phase` | 2 (aggressive 2% → 3%) | 3 (fair → aggressive → fair+full 4h) | `long_strangle_index_move` |
+| `max_hold_close_1phase` | — | 1 (fair+full 30s) | Max-hold close override |
+
+### Complete Strategy Example
+
+```python
+from strategy import StrategyConfig
+from option_selection import strangle
+from execution.profiles import get_profile
+from trade_lifecycle import profit_target, max_hold_hours
+
+profile = get_profile("delta_strangle_2phase")
+
+config = StrategyConfig(
+    name="patient_strangle",
+    legs=strangle(qty=0.01, call_delta=0.15, put_delta=-0.15, dte="next", side="buy"),
+    execution_mode="limit",
+    metadata={"_execution_profile": profile},
+    exit_conditions=[profit_target(50), max_hold_hours(4)],
+    max_trades_per_day=1,
+)
+```
+
+---
+
 ## Order Manager
 
 See [order_manager.py](../order_manager.py) — central order ledger preventing duplicate and runaway orders.
 
 ### Purpose
-Every order placement and cancellation goes through `OrderManager`. It wraps `TradeExecutor` and adds:
+Every order placement and cancellation goes through `OrderManager`. It wraps an exchange executor and adds:
 - **Idempotent placement** — dedup key `(lifecycle_id, leg_index, purpose)` prevents duplicate orders
 - **Supersession chains** — `requote_order()` atomically cancels old + places new + links them
 - **Hard caps** — 30 orders per lifecycle, 4 pending per symbol
 - **Safety enforcement** — close/unwind orders always force `reduce_only=True`
 - **JSONL audit** — every state change appended to `logs/order_audit.jsonl`
 - **JSON snapshots** — `logs/active_orders.json` for crash recovery
-- **Exchange reconciliation** — `reconcile()` detects orphans and stale entries. Skips PENDING orders and orders placed within the last 30 seconds (grace period to avoid false positives on newly placed orders).
+- **Exchange reconciliation** — `reconcile()` detects orphans and stale entries
 
 ### Key Classes
 | Class | Purpose |
@@ -456,122 +597,11 @@ om.persist_snapshot()
 ```
 
 ### Integration Points
-- `LimitFillManager` routes through `OrderManager` when present (backward compatible — works without it)
+- `FillManager` routes through `OrderManager` for all order operations
 - `LifecycleEngine` creates and owns the `OrderManager` instance
 - `LifecycleEngine.tick()` checks `has_live_orders()` before allowing close (PENDING_CLOSE guard)
 - `position_closer.py` calls `order_manager.cancel_all()` after `kill_all()`
 - `main.py` crash recovery: `load_snapshot()` → `poll_all()` → `reconcile()`
-
-### RFQParams Dataclass
-
-Typed container for RFQ execution parameters, replacing loose `metadata` keys:
-
-```python
-from trade_lifecycle import RFQParams
-
-rfq_params = RFQParams(
-    timeout_seconds=300,        # Wait up to 5 minutes for quotes
-    min_improvement_pct=2.0,    # Require 2% improvement vs orderbook
-    fallback_mode="limit",      # Fall back to limit orders if RFQ fails
-)
-```
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `timeout_seconds` | `float` | `60.0` | How long to wait for RFQ quotes |
-| `min_improvement_pct` | `float` | `-999.0` | Minimum improvement vs orderbook (-999 = accept anything) |
-| `fallback_mode` | `str\|None` | `None` | What to do if RFQ fails (e.g., `"limit"`) |
-
----
-
-## Trade Execution — Configurable Timing
-
-See [trade_execution.py](../trade_execution.py) for the implementation.
-
-### ExecutionPhase Dataclass
-
-Declares a pricing phase for the `LimitFillManager`. Multiple phases can be sequenced to start conservatively and escalate:
-
-```python
-from trade_execution import ExecutionPhase, ExecutionParams
-
-params = ExecutionParams(phases=[
-    ExecutionPhase(pricing="mark",       duration_seconds=300, reprice_interval=30),
-    ExecutionPhase(pricing="mid",        duration_seconds=120, reprice_interval=20),
-    ExecutionPhase(pricing="aggressive", duration_seconds=60,  buffer_pct=3.0),
-])
-```
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `pricing` | `str` | `"aggressive"` | Pricing mode: `"aggressive"`, `"mid"`, `"top_of_book"`, `"mark"` |
-| `duration_seconds` | `float` | `30.0` | How long this phase lasts (min 10s, auto-clamped) |
-| `buffer_pct` | `float` | `2.0` | Buffer % for aggressive pricing |
-| `reprice_interval` | `float` | `30.0` | Seconds between reprices in this phase (min 10s) |
-
-### Pricing Modes
-
-| Mode | Buy Price | Sell Price | Use Case |
-|------|-----------|------------|----------|
-| `"mark"` | Mark price | Mark price | Most patient; wait for fair value |
-| `"mid"` | (bid+ask)/2 | (bid+ask)/2 | Balanced |
-| `"top_of_book"` | Best ask | Best bid | Match best available |
-| `"aggressive"` | Best ask × (1 + buffer%) | Best bid × (1 - buffer%) | Cross the spread; fastest fill |
-
-### Phased vs Legacy Mode
-
-- **Legacy** (`phases=None`): Single aggressive mode with `fill_timeout_seconds` and `max_requote_rounds`. This is the default.
-- **Phased** (`phases=[...]`): LimitFillManager walks through each phase in sequence. When a phase’s `duration_seconds` expires, it advances to the next phase. After the last phase, the fill manager signals expiry.
-
-### ExecutionParams Dataclass
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `fill_timeout_seconds` | `float` | `30.0` | Fill timeout per round (legacy mode) |
-| `aggressive_buffer_pct` | `float` | `2.0` | Aggressive buffer % (legacy mode) |
-| `max_requote_rounds` | `int` | `10` | Max requote rounds (legacy mode) |
-| `phases` | `list[ExecutionPhase]\|None` | `None` | Phased execution config (overrides legacy) |
-
-### Close-Order Safety (v0.9.3)
-
-**`reduce_only` flag:** All close orders are placed with `reduceOnly=1` on the exchange API. This is an exchange-level guarantee that a close order can never exceed the open position size — it physically cannot create a reverse position regardless of retry logic bugs.
-
-**Price pre-validation:** `place_all()` validates prices for ALL legs before placing ANY orders. If one leg has no orderbook liquidity, no orders are placed at all. This prevents the partial-placement race condition where one leg fills while the other's cancel arrives too late.
-
-**Circuit breaker:** `_close_limit()` tracks close attempts per trade. After 10 failed attempts, the trade transitions to `FAILED` with a critical log. This prevents infinite retry loops when market conditions make closing impossible.
-
-**Requote skip-if-unchanged:** `_requote_unfilled()` skips requoting when the new price is within $0.01 of the existing order price (tolerance check), avoiding wasteful cancel+replace cycles on stable markets. Logged at INFO level when skipped.
-
-```python
-# Close orders are always reduce_only — set automatically by _close_limit()
-mgr.place_all(trade.close_legs, reduce_only=True)
-
-# place_order() passes it to the exchange API
-payload['reduceOnly'] = 1  # exchange rejects if order > open position
-```
-
-### Complete Strategy Example
-
-```python
-from strategy import StrategyConfig
-from option_selection import strangle
-from trade_execution import ExecutionParams, ExecutionPhase
-from trade_lifecycle import RFQParams, profit_target, max_hold_hours
-
-config = StrategyConfig(
-    name="patient_strangle",
-    legs=strangle(qty=0.01, call_delta=0.15, put_delta=-0.15, dte="next", side="buy"),
-    execution_mode="limit",
-    execution_params=ExecutionParams(phases=[
-        ExecutionPhase(pricing="mark",       duration_seconds=300, reprice_interval=30),
-        ExecutionPhase(pricing="mid",        duration_seconds=120, reprice_interval=20),
-        ExecutionPhase(pricing="aggressive", duration_seconds=60,  buffer_pct=2.0),
-    ]),
-    rfq_params=RFQParams(timeout_seconds=120, min_improvement_pct=1.0),
-    exit_conditions=[profit_target(50), max_hold_hours(4)],
-    max_trades_per_day=1,
-)
-```
 
 ---
 
@@ -848,7 +878,7 @@ if result.success:
 
 ### Integration Status
 
-`SmartOrderbookExecutor` is a standalone module. It is **not** integrated into `ExecutionRouter` — the router only supports `limit` and `rfq` modes. To use smart execution, call `SmartOrderbookExecutor.execute_smart_multi_leg()` directly.
+`SmartOrderbookExecutor` is a standalone module. It is **not** integrated into `Router` — the router only supports `limit` and `rfq` modes. To use smart execution, call `SmartOrderbookExecutor.execute_smart_multi_leg()` directly.
 
 ### Use Cases
 

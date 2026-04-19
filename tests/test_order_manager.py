@@ -493,3 +493,68 @@ class TestReconciliation:
         r1.status = OrderStatus.LIVE
         warnings = om.reconcile([])
         assert any(r1.order_id in w for w in warnings)
+
+
+# ── Phase 3: Price type safety ───────────────────────────────────────────
+
+class TestPhase3PriceAcceptance:
+    """OrderManager accepts Price objects and extracts .amount for executor."""
+
+    def test_place_order_with_price_object(self):
+        from execution.currency import Price, Currency
+        om, mock = fresh_om()
+        p = Price(0.0100, Currency.BTC)
+        record = om.place_order(
+            lifecycle_id="p3-1", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
+            symbol="BTC-P", side="sell", qty=0.5, price=p,
+        )
+        assert record is not None
+        # Executor received float amount, not Price object
+        call_name, call_kwargs = mock.calls[-1]
+        assert call_name == "place_order"
+        assert call_kwargs["price"] == 0.0100
+        assert isinstance(call_kwargs["price"], float)
+        # Record stores original Price
+        assert record.price is p
+
+    def test_place_order_with_float_backward_compat(self):
+        om, mock = fresh_om()
+        record = om.place_order(
+            lifecycle_id="p3-2", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
+            symbol="BTC-P", side="sell", qty=0.5, price=0.0100,
+        )
+        assert record is not None
+        call_name, call_kwargs = mock.calls[-1]
+        assert call_kwargs["price"] == 0.0100
+        assert record.price == 0.0100
+
+    def test_order_record_price_serialization_round_trip(self):
+        from execution.currency import Price, Currency
+        om, _ = fresh_om()
+        p = Price(0.0100, Currency.BTC)
+        record = om.place_order(
+            lifecycle_id="p3-3", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
+            symbol="BTC-P", side="sell", qty=0.5, price=p,
+        )
+        d = record.to_dict()
+        assert isinstance(d["price"], dict)
+        assert d["price"]["amount"] == 0.0100
+        assert d["price"]["currency"] == "BTC"
+
+        restored = OrderRecord.from_dict(d)
+        assert isinstance(restored.price, Price)
+        assert restored.price.amount == 0.0100
+        assert restored.price.currency == Currency.BTC
+
+    def test_order_record_float_price_serialization_backward_compat(self):
+        """Float price still round-trips through to_dict/from_dict."""
+        from execution.currency import Price, Currency
+        om, _ = fresh_om()
+        record = om.place_order(
+            lifecycle_id="p3-4", leg_index=0, purpose=OrderPurpose.OPEN_LEG,
+            symbol="BTC-P", side="sell", qty=0.5, price=500.0,
+        )
+        d = record.to_dict()
+        assert d["price"] == 500.0
+        restored = OrderRecord.from_dict(d)
+        assert restored.price == 500.0

@@ -36,6 +36,8 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 from config import BASE_URL, API_KEY, API_SECRET
 from auth import CoincallAuth
+from execution.currency import Currency, OrderbookSnapshot, Price
+from execution.pricing import PricingEngine
 
 logger = logging.getLogger(__name__)
 _execution_logger = logging.getLogger("ct.execution")  # structured JSONL → logs/execution.jsonl
@@ -316,6 +318,7 @@ class LimitFillManager:
         self._params = params or ExecutionParams()
         self._order_manager = order_manager
         self._market_data = market_data
+        self._pricing_engine = PricingEngine()
         self._legs: List[_LegFillState] = []
         self._skipped_symbols: List[str] = []
         self._round_started_at: float = time.time()
@@ -840,210 +843,79 @@ class LimitFillManager:
             return self._get_aggressive_price(symbol, side)
 
     def _get_phased_price(self, symbol: str, side: str, phase: ExecutionPhase) -> Optional[float]:
-        """Compute price according to the phase's pricing strategy."""
+        """Compute price according to the phase's pricing strategy.
+
+        Delegates to PricingEngine.compute() for all pricing logic.
+        Converts the raw orderbook dict from market_data into an
+        OrderbookSnapshot before calling the engine.
+        """
         try:
             ob = self._market_data.get_option_orderbook(symbol)
             if not ob:
                 return None
 
-            best_ask = float(ob['asks'][0]['price']) if ob.get('asks') else None
-            best_bid = float(ob['bids'][0]['price']) if ob.get('bids') else None
+            snapshot = self._build_snapshot(ob, symbol)
 
-            if phase.pricing == "aggressive":
-                buffer = 1 + (phase.buffer_pct / 100.0)
-                if side == "buy" and best_ask is not None:
-                    return best_ask * buffer
-                elif side == "sell" and best_bid is not None:
-                    return best_bid / buffer
+            # Convert min_floor_price from float to Price (if set)
+            floor_price = None
+            if phase.min_floor_price is not None:
+                floor_price = Price(phase.min_floor_price, snapshot.currency)
 
-            elif phase.pricing == "mid":
-                if best_bid is not None and best_ask is not None:
-                    return (best_bid + best_ask) / 2
+            result = self._pricing_engine.compute(
+                orderbook=snapshot,
+                side=side,
+                mode=phase.pricing,
+                aggression=phase.fair_aggression,
+                buffer_pct=phase.buffer_pct,
+                min_price_pct_of_fair=phase.min_price_pct_of_fair,
+                min_floor_price=floor_price,
+            )
 
-            elif phase.pricing == "passive":
-                if side == "buy" and best_bid is not None:
-                    return best_bid
-                elif side == "sell" and best_ask is not None:
-                    return best_ask
+            if result.price is not None:
+                return result.price.amount
+            return None
 
-            elif phase.pricing == "top_of_book":
-                if side == "buy" and best_ask is not None:
-                    return best_ask
-                elif side == "sell" and best_bid is not None:
-                    return best_bid
-
-            elif phase.pricing == "mark":
-                # Prefer BTC-native mark (Deribit); fall back to USD mark (Coincall)
-                mark_btc = float(ob.get('_mark_btc', 0))
-                if mark_btc > 0:
-                    return mark_btc
-                mark = float(ob.get('mark', 0))
-                if mark > 0:
-                    return mark
-                # Fall back to mid if mark unavailable
-                if best_bid is not None and best_ask is not None:
-                    return (best_bid + best_ask) / 2
-
-            elif phase.pricing == "fair":
-                # ── Denomination contract ────────────────────────────────────────────
-                # The orderbook carries mark prices in two denominations depending on
-                # the active exchange adapter:
-                #
-                #   Deribit adapter (BTC-denominated fill prices):
-                #     ob['bids'] / ob['asks']  — BTC prices; correct for order placement.
-                #     ob['_mark_btc']          — BTC mark price (use this for pricing).
-                #     ob['mark']               — USD mark (mark_btc × index_price).
-                #                                FOR DISPLAY / NOTIONAL ONLY.
-                #                                NEVER submit to Deribit as an order price.
-                #     ob['_index_price']       — USD spot price (for sanity checks only).
-                #
-                #   Coincall adapter (USD-denominated fill prices):
-                #     ob['bids'] / ob['asks']  — USD prices.
-                #     ob['mark']               — USD mark.  Use this.
-                #     ob['_mark_btc']          — not populated (returns 0).
-                #
-                # ALWAYS prefer ob['_mark_btc'] when it is non-zero.
-                #
-                # Root cause of the 2026-04-15 price_too_high incident:
-                #   OLD: `float(ob.get('mark', 0)) or float(ob.get('_mark_btc', 0))`
-                #   This short-circuits on the non-zero USD mark (e.g. $7.44), so
-                #   _mark_btc is NEVER used.  The USD value ($7.44) is then submitted
-                #   as a BTC price (7.44 BTC ≈ $550k) → Deribit rejects price_too_high.
-                mark_btc = float(ob.get('_mark_btc', 0))
-                mark_usd = float(ob.get('mark', 0))
-                mark = mark_btc if mark_btc > 0 else mark_usd  # always correct denomination
-
-                # ob['_index_price'] is only populated by the Deribit adapter.
-                # Used exclusively in the plausibility guard below.  Zero for Coincall.
-                index_price = float(ob.get('_index_price', 0))
-
-                # ── Determine fair value ─────────────────────────────────────────────
-                # Produce a single-number fair-value estimate in the exchange's native
-                # fill denomination (BTC for Deribit, USD for Coincall).
-                # The mark selection above guarantees the correct denomination is used.
-                #
-                # Priority order (most → least data available):
-                #   1. Full book  — mark if inside [bid, ask], else midpoint.
-                #   2. Bid only   — max(mark, bid); guards against pricing below the
-                #                   best bid (would guarantee an instant fill — bad  for
-                #                   a passive open sell order).
-                #   3. Ask only   — min(mark, ask).  THIS WAS THE MISSING CASE that
-                #                   caused the 2026-04-15 incident.  Deep-OTM legs near
-                #                   expiry commonly have NO buyers (bid = None) but still
-                #                   have a Deribit-max ask (e.g. 0.022 BTC).  Without
-                #                   this branch, execution fell through to "mark only",
-                #                   and mark was the USD value — denomination mismatch.
-                #   4. Mark only  — when neither side of the book is quoted at all.
-                #   5. Nothing    — fair = None; falls through to min_floor_price below.
-                fair: Optional[float] = None
-                if best_bid is not None and best_ask is not None:
-                    # Full two-sided book.
-                    fair = mark if (best_bid <= mark <= best_ask) else (best_bid + best_ask) / 2
-                elif best_bid is not None:
-                    # Ask side empty — guard: price must not be below the tightest bid.
-                    fair = max(mark, best_bid) if mark > 0 else best_bid
-                elif best_ask is not None:
-                    # Bid side empty — deep-OTM or near-expiry leg with no buyers.
-                    # Prefer the lower of mark and ask: fair_aggression will slide the
-                    # final order price toward the ask when closing aggressively.
-                    fair = min(mark, best_ask) if mark > 0 else best_ask
-                elif mark > 0:
-                    # No book at all — trust the mark price as a last resort.
-                    fair = mark
-                # else: fair stays None → price stays None → min_floor_price applies.
-
-                # ── Apply fair_aggression to arrive at the order price ───────────────
-                price: Optional[float] = None
-                if fair is not None:
-                    a = phase.fair_aggression
-                    if side == "sell":
-                        # Slide from fair toward best bid as aggression increases.
-                        # spread_to_bid = 0 when best_bid is absent (one-sided book),
-                        # so the order stays at fair regardless of aggression.
-                        spread_to_bid = (fair - best_bid) if best_bid is not None else 0.0
-                        price = fair - a * spread_to_bid
-
-                        # min_price_pct_of_fair: optional hard floor for sell orders.
-                        # Refuses to open a sell leg when the spread is so wide that
-                        # the passive price would be economically unacceptable.
-                        # Returns None immediately — MUST NOT fall through to
-                        # min_floor_price below, which is only for buy-to-close legs.
-                        if phase.min_price_pct_of_fair is not None:
-                            floor = fair * phase.min_price_pct_of_fair
-                            if price < floor:
-                                logger.warning(
-                                    f"LimitFillManager: {symbol} sell price {price:.6f} "
-                                    f"< floor {floor:.6f} "
-                                    f"(fair={fair:.6f} × {phase.min_price_pct_of_fair:.0%})"
-                                    f" — refusing to place"
-                                )
-                                return None  # explicit refusal; bypass min_floor_price
-                    else:  # buy (closing a short position)
-                        if best_ask is not None:
-                            # Slide from fair toward best ask as aggression increases.
-                            spread_to_ask = best_ask - fair
-                            price = fair + a * spread_to_ask
-                        elif mark > 0:
-                            # No ask in the book (illiquid / no active sellers).
-                            # Escalate slightly above mark, scaling with aggression, so
-                            # the order is visible to any latent seller.
-                            price = mark * (1.0 + a * 0.2)
-                        else:
-                            # fair derived entirely from the bid side; no ask or mark.
-                            price = fair
-
-                # ── BTC price plausibility guard ─────────────────────────────────────
-                # A BTC option is bounded above by the value of 1 BTC (the underlying
-                # itself).  Any computed price above 1.0 almost certainly indicates a
-                # denomination error that slipped through the mark selection above.
-                # This guard is a last-resort safety net — the mark_btc preference is
-                # the real fix and should prevent this from triggering in practice.
-                #
-                # Only applied when _index_price > 0 (Deribit adapter), because Coincall
-                # prices are in USD and may legitimately be in the thousands of dollars,
-                # which is correct behaviour and must not trigger a false positive.
-                if price is not None and index_price > 0 and price > 1.0:
-                    logger.error(
-                        f"LimitFillManager [{symbol}] BTC PRICE SANITY FAIL: "
-                        f"computed {price:.6f} BTC (≈${price * index_price:,.2f}) — "
-                        f"exceeds 1 BTC which is implausible for any BTC option.  "
-                        f"Likely a denomination error.  "
-                        f"mark_btc={mark_btc:.6f}  mark_usd={mark_usd:.4f}  "
-                        f"best_bid={best_bid}  best_ask={best_ask}  "
-                        f"index=${index_price:,.0f}.  Refusing to place."
-                    )
-                    return None  # explicit refusal; bypass min_floor_price
-
-                # Return the computed price.  If no valid price could be computed
-                # (price is None or ≤ 0), apply min_floor_price as a last resort for
-                # deep-OTM near-worthless buy-to-close legs where the book is empty
-                # (e.g. an expiring OTM leg where bid = ask = mark = 0).
-                if price is not None and price > 0:
-                    return price
-                if phase.min_floor_price is not None:
-                    logger.info(
-                        f"LimitFillManager: no valid fair price for {symbol} ({side}) "
-                        f"— using min_floor_price {phase.min_floor_price}"
-                    )
-                    return phase.min_floor_price
-                return price  # None or ≤ 0 — best_effort close logic will skip this leg
-
-            price = None
         except Exception as e:
             logger.error(f"LimitFillManager: error computing {phase.pricing} price for {symbol}: {e}")
-            price = None
+            return None
 
-        # min_floor_price: last-resort fallback for deep-OTM legs with no bids.
-        # Only activates when the computed price is None or zero — never overrides
-        # a valid price, and never interacts with min_price_pct_of_fair.
-        if (price is None or price <= 0) and phase.min_floor_price is not None:
-            logger.info(
-                f"LimitFillManager: no valid price for {symbol} ({side}) "
-                f"— using min_floor_price {phase.min_floor_price} BTC"
-            )
-            return phase.min_floor_price
+    @staticmethod
+    def _build_snapshot(ob: dict, symbol: str) -> OrderbookSnapshot:
+        """Convert a raw orderbook dict from market_data into an OrderbookSnapshot.
 
-        return price
+        Denomination detection:
+          - Prefers explicit '_currency' tag (set by exchange adapters).
+          - Falls back to _mark_btc heuristic for backward compat.
+        """
+        best_ask = float(ob['asks'][0]['price']) if ob.get('asks') else None
+        best_bid = float(ob['bids'][0]['price']) if ob.get('bids') else None
+
+        mark_btc = float(ob.get('_mark_btc', 0))
+        mark_usd = float(ob.get('mark', 0))
+
+        # Prefer explicit _currency tag (set by exchange adapters in Phase 3.1)
+        raw_currency = ob.get('_currency')
+        if raw_currency:
+            currency = Currency(raw_currency)
+            mark = mark_btc if currency == Currency.BTC else (mark_usd if mark_usd > 0 else None)
+        elif mark_btc > 0:
+            currency = Currency.BTC
+            mark = mark_btc
+        else:
+            currency = Currency.USD
+            mark = mark_usd if mark_usd > 0 else None
+
+        index_price = float(ob.get('_index_price', 0)) or None
+
+        return OrderbookSnapshot(
+            symbol=symbol,
+            currency=currency,
+            best_bid=best_bid,
+            best_ask=best_ask,
+            mark=mark,
+            index_price=index_price,
+            timestamp=time.time(),
+        )
 
     def _get_aggressive_price(self, symbol: str, side: str) -> Optional[float]:
         """Fetch best bid/ask and apply aggressive buffer (legacy mode)."""

@@ -7,24 +7,24 @@ Owns and advances all TradeLifecycle objects through their state machine:
 
 Architecture:
   - LifecycleEngine is the entry point that strategies and main.py talk to.
-  - Delegates execution to ExecutionRouter (which in turn uses LimitFillManager
-    or RFQExecutor depending on execution_mode).
-  - Drives the close loop: PENDING_CLOSE → _close_limit (places orders) → CLOSING
+  - Delegates execution to Router (execution/router.py) which uses FillManager
+    for limit orders or RFQ for block trades.
+  - Drives the close loop: PENDING_CLOSE → Router.close() → CLOSING
     → _check_close_fills (polls fills) → back to PENDING_CLOSE on failure/partial.
   - tick(account) is called every 10s by PositionMonitor and advances every
     active trade one step.  Strategies do not call tick directly.
 
 Key design rules:
-  - Open orders: atomic — all legs or none (prevents naked legs).
+  - Open orders: atomic by default — all legs or none (prevents naked legs).
+    Configurable retries + unwind via ExecutionProfile.max_open_retries.
   - Close orders: best_effort — each leg is placed independently; a pricing
     failure on one leg skips that leg and retries it next tick, rather than
     aborting the entire close.
-  - Circuit breaker: after MAX_CLOSE_ATTEMPTS (10) the trade transitions to
+  - Circuit breaker: after MAX_CLOSE_ATTEMPTS the trade transitions to
     FAILED and logs which symbols still need manual intervention.
 
 Typical wiring in main.py:
-    engine = LifecycleEngine(executor=..., rfq_executor=..., market_data=...)
-    position_monitor.on_update(engine.tick)
+    engine = LifecycleEngine(executor=..., market_data=...)
     trade = engine.create(legs=[...], exit_conditions=[...])
     engine.open(trade.id)
     # tick() drives everything from here
@@ -35,14 +35,16 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from exchanges.deribit.symbols import option_expiry_utc
 
-from account_manager import AccountSnapshot, PositionSnapshot
-from trade_execution import LimitFillManager, ExecutionParams
-from order_manager import OrderManager, OrderPurpose, OrderStatus
-from execution_router import ExecutionRouter
+from account_manager import AccountSnapshot
+from order_manager import OrderManager, OrderPurpose
+from execution.currency import Currency, Price
+from execution.fill_manager import FillManager
+from execution.fill_result import FillStatus
+from execution.router import Router
 from trade_lifecycle import (
     ExitCondition,
     RFQParams,
@@ -53,6 +55,15 @@ from trade_lifecycle import (
 
 logger = logging.getLogger(__name__)
 _strategy_logger = logging.getLogger("ct.strategy")  # structured JSONL → logs/strategy.jsonl
+
+
+def _to_price(fill_price, currency: Optional[Currency]) -> Any:
+    """Convert a raw fill_price to Price if currency is known."""
+    if fill_price is None or isinstance(fill_price, Price):
+        return fill_price
+    if currency is not None:
+        return Price(float(fill_price), currency)
+    return fill_price
 
 
 class LifecycleEngine:
@@ -82,19 +93,24 @@ class LifecycleEngine:
         rfq_executor=None,
         market_data=None,
         exchange_state_map: dict = None,
+        expected_denomination: "Optional[Currency]" = None,
     ):
         self._trades: Dict[str, TradeLifecycle] = {}
         self._executor = executor
         self._rfq_executor = rfq_executor
         self._market_data = market_data
-        self._order_manager = OrderManager(self._executor, exchange_state_map=exchange_state_map)
+        self._order_manager = OrderManager(
+            self._executor,
+            exchange_state_map=exchange_state_map,
+            expected_denomination=expected_denomination,
+        )
         self._account_manager = account_manager
         self._tick_counter: int = 0
         self._last_reconciliation_warnings: List[str] = []
         self._last_reconciliation_time: Optional[float] = None
         self._notifier = None  # lazy-loaded TelegramNotifier
 
-        self._router = ExecutionRouter(
+        self._router = Router(
             executor=self._executor,
             rfq_executor=self._rfq_executor,
             order_manager=self._order_manager,
@@ -149,7 +165,7 @@ class LifecycleEngine:
         exit_conditions: Optional[List[ExitCondition]] = None,
         execution_mode: Optional[str] = None,
         rfq_action: str = "buy",
-        execution_params: Optional[ExecutionParams] = None,
+        execution_params: Optional[Any] = None,  # legacy ExecutionParams (unused by new profiles)
         rfq_params: Optional[RFQParams] = None,
         strategy_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
@@ -189,10 +205,14 @@ class LifecycleEngine:
             "trade_id": trade.id,
             "legs": [{"symbol": l.symbol, "qty": l.qty, "side": l.side} for l in trade.open_legs],
         })
-        return self._router.open(trade)
+        result = self._router.open(trade)
+        # Capture fees from immediate fills (RFQ path fills instantly)
+        if result.status == FillStatus.FILLED and result.total_fees:
+            trade.open_fees = result.total_fees
+        return result.status not in (FillStatus.REFUSED, FillStatus.FAILED)
 
     def close(self, trade_id: str) -> bool:
-        """Place orders to close a trade. Routes via ExecutionRouter."""
+        """Place orders to close a trade. Routes via Router."""
         trade = self._trades.get(trade_id)
         if not trade:
             logger.error(f"Trade {trade_id} not found")
@@ -200,41 +220,132 @@ class LifecycleEngine:
         if trade.state not in (TradeState.OPEN, TradeState.PENDING_CLOSE):
             logger.error(f"Trade {trade_id} not closeable (is {trade.state.value})")
             return False
-        return self._router.close(trade)
+        result = self._router.close(trade)
+        # Capture fees from immediate fills (RFQ path fills instantly)
+        if result.status == FillStatus.FILLED and result.total_fees:
+            trade.close_fees = result.total_fees
+        return result.status not in (FillStatus.REFUSED, FillStatus.FAILED)
 
     # ── Fill checking ────────────────────────────────────────────────────
 
     def _check_open_fills(self, trade: TradeLifecycle) -> None:
-        """Delegate fill-checking to LimitFillManager."""
-        mgr: Optional[LimitFillManager] = trade.metadata.get("_open_fill_mgr")
+        """Delegate fill-checking to FillManager."""
+        mgr: Optional[FillManager] = trade.metadata.get("_open_fill_mgr")
         if mgr is None:
             logger.error(f"Trade {trade.id}: no fill manager for OPENING state")
             return
 
         result = mgr.check()
 
-        if result == "filled":
-            for ls, leg in zip(mgr.filled_legs, trade.open_legs):
-                leg.filled_qty = ls.filled_qty
-                leg.fill_price = ls.fill_price
-                leg.order_id = ls.order_id
+        if result.status == FillStatus.FILLED:
+            # Sync fills from FillManager legs → trade open legs
+            fill_by_symbol = {ls.symbol: ls for ls in mgr.legs}
+            _currency = mgr.detected_currency
+            trade.currency = _currency
+            for leg in trade.open_legs:
+                ls = fill_by_symbol.get(leg.symbol)
+                if ls:
+                    leg.filled_qty = ls.filled_qty
+                    leg.fill_price = _to_price(ls.fill_price, _currency)
+                    leg.order_id = ls.order_id
+            # Capture open fees
+            if result.total_fees:
+                trade.open_fees = result.total_fees
+
+            if mgr.has_skipped_legs:
+                # Some legs were skipped (no orderbook, placement rejected, etc.)
+                # Retry up to max_open_retries before unwinding.
+                profile = self._router._resolve_profile(trade)
+                max_retries = profile.max_open_retries if profile else 3
+                retry_count = trade.metadata.get("_open_skip_retry_count", 0) + 1
+                trade.metadata["_open_skip_retry_count"] = retry_count
+                skipped = mgr.skipped_symbols
+
+                if retry_count <= max_retries:
+                    logger.warning(
+                        f"Trade {trade.id}: {len(skipped)} leg(s) skipped on open: "
+                        f"{skipped} — retry {retry_count}/{max_retries}"
+                    )
+                    _strategy_logger.info({
+                        "event": "TRADE_OPEN_RETRY_SKIPPED",
+                        "trade_id": trade.id,
+                        "skipped": skipped,
+                        "retry": retry_count,
+                        "max_retries": max_retries,
+                    })
+                    # Re-place only the skipped legs via a fresh FillManager
+                    skipped_set = set(skipped)
+                    skipped_legs = [l for l in trade.open_legs if l.symbol in skipped_set]
+                    from order_manager import OrderPurpose
+                    new_profile = self._router._resolve_profile(trade)
+                    new_mgr = FillManager(
+                        order_manager=self._order_manager,
+                        market_data=self._market_data,
+                        profile=new_profile,
+                        params=trade.execution_params,
+                        direction="open",
+                    )
+                    new_result = new_mgr.place_all(
+                        skipped_legs,
+                        lifecycle_id=trade.id,
+                        purpose=OrderPurpose.OPEN_LEG,
+                    )
+                    if new_result.status in (FillStatus.REFUSED, FillStatus.FAILED):
+                        # Placement failed immediately — stay in OPENING, will retry next tick
+                        logger.warning(
+                            f"Trade {trade.id}: retry placement failed for skipped legs, "
+                            f"will retry next tick"
+                        )
+                    else:
+                        trade.metadata["_open_fill_mgr"] = new_mgr
+                    return
+
+                # Retries exhausted — unwind filled legs
+                logger.error(
+                    f"Trade {trade.id}: skipped legs {skipped} not filled after "
+                    f"{max_retries} retries — unwinding"
+                )
+                _strategy_logger.info({
+                    "event": "TRADE_OPEN_UNWIND",
+                    "trade_id": trade.id,
+                    "skipped": skipped,
+                    "retries_exhausted": max_retries,
+                })
+                mgr.cancel_all()
+                filled_legs = [leg for leg in trade.open_legs if leg.filled_qty > 0]
+                if filled_legs:
+                    self._unwind_filled_legs(trade, filled_legs)
+                else:
+                    trade.state = TradeState.FAILED
+                    trade.error = f"All legs skipped after {max_retries} retries"
+                return
+
             trade.state = TradeState.OPEN
             trade.opened_at = time.time()
+            trade.metadata.pop("_open_skip_retry_count", None)
             logger.info(f"Trade {trade.id}: all open legs filled → OPEN")
             _strategy_logger.info({
                 "event": "TRADE_OPENED",
                 "trade_id": trade.id,
+                "fill_status": result.status.value,
                 "legs": [
-                    {"symbol": l.symbol, "fill_price": l.fill_price, "filled_qty": l.filled_qty}
+                    {"symbol": l.symbol, "fill_price": float(l.fill_price) if l.fill_price is not None else None, "filled_qty": l.filled_qty}
                     for l in trade.open_legs
                 ],
+                "fee_total": float(result.total_fees) if result.total_fees else None,
+                "denomination": trade.currency.value if trade.currency else None,
             })
-        elif result == "failed":
-            logger.error(f"Trade {trade.id}: fill manager exhausted requote rounds")
-            for ls, leg in zip(mgr.filled_legs, trade.open_legs):
-                leg.filled_qty = ls.filled_qty
-                leg.fill_price = ls.fill_price
-                leg.order_id = ls.order_id
+
+        elif result.status == FillStatus.FAILED:
+            logger.error(f"Trade {trade.id}: fill manager exhausted phases")
+            fill_by_symbol = {ls.symbol: ls for ls in mgr.legs}
+            _currency = mgr.detected_currency
+            for leg in trade.open_legs:
+                ls = fill_by_symbol.get(leg.symbol)
+                if ls:
+                    leg.filled_qty = ls.filled_qty
+                    leg.fill_price = _to_price(ls.fill_price, _currency)
+                    leg.order_id = ls.order_id
             mgr.cancel_all()
             filled_legs = [leg for leg in trade.open_legs if leg.filled_qty > 0]
             if filled_legs:
@@ -251,16 +362,21 @@ class LifecycleEngine:
                     "trade_id": trade.id,
                     "reason": "fill_manager_exhausted",
                 })
-        elif result == "requoted":
-            for ls, leg in zip(mgr.filled_legs, trade.open_legs):
-                leg.order_id = ls.order_id
-                leg.filled_qty = ls.filled_qty
-                leg.fill_price = ls.fill_price
+
+        elif result.status == FillStatus.REQUOTED:
+            fill_by_symbol = {ls.symbol: ls for ls in mgr.legs}
+            _currency = mgr.detected_currency
+            for leg in trade.open_legs:
+                ls = fill_by_symbol.get(leg.symbol)
+                if ls:
+                    leg.order_id = ls.order_id
+                    leg.filled_qty = ls.filled_qty
+                    leg.fill_price = _to_price(ls.fill_price, _currency)
             logger.debug(f"Trade {trade.id}: requoted unfilled open legs, continuing")
 
     def _check_close_fills(self, trade: TradeLifecycle) -> None:
-        """Delegate close-fill checking to LimitFillManager."""
-        mgr: Optional[LimitFillManager] = trade.metadata.get("_close_fill_mgr")
+        """Delegate close-fill checking to FillManager."""
+        mgr: Optional[FillManager] = trade.metadata.get("_close_fill_mgr")
         if mgr is None:
             logger.error(f"Trade {trade.id}: no fill manager for CLOSING state")
             return
@@ -268,25 +384,19 @@ class LifecycleEngine:
         result = mgr.check()
 
         def _sync_fills(close_legs, fill_states):
-            """Sync fill state back to close leg objects, matched by symbol.
-
-            Symbol-based matching (rather than index zip) is required when
-            best_effort placement skips some legs — the fill manager's leg list
-            is then shorter than trade.close_legs and index alignment breaks.
-            """
+            """Sync fill state back to close leg objects, matched by symbol."""
             fill_by_symbol = {ls.symbol: ls for ls in fill_states}
+            _currency = mgr.detected_currency
             for leg in close_legs:
                 ls = fill_by_symbol.get(leg.symbol)
                 if ls:
                     leg.filled_qty = ls.filled_qty
-                    leg.fill_price = ls.fill_price
+                    leg.fill_price = _to_price(ls.fill_price, _currency)
                     leg.order_id = ls.order_id
 
-        if result == "filled":
-            _sync_fills(trade.close_legs, mgr.filled_legs)
+        if result.status == FillStatus.FILLED:
+            _sync_fills(trade.close_legs, mgr.legs)
             if mgr.has_skipped_legs:
-                # Placed legs all filled but some couldn't be priced/placed —
-                # return to PENDING_CLOSE so _close_limit retries the remainder.
                 logger.warning(
                     f"Trade {trade.id}: placed legs filled but "
                     f"{len(mgr.skipped_symbols)} leg(s) skipped: "
@@ -296,25 +406,35 @@ class LifecycleEngine:
             else:
                 trade.state = TradeState.CLOSED
                 trade.closed_at = time.time()
+                # Capture close fees
+                if result.total_fees:
+                    trade.close_fees = result.total_fees
                 trade._finalize_close()
                 logger.info(f"Trade {trade.id}: all close legs filled \u2192 CLOSED (PnL={trade.realized_pnl:+.4f})")
                 duration_s = int(trade.closed_at - (trade.opened_at or getattr(trade, 'created_at', None) or trade.closed_at))
                 _strategy_logger.info({
                     "event": "TRADE_CLOSED",
                     "trade_id": trade.id,
+                    "fill_status": result.status.value,
                     "trigger": trade.metadata.get("close_trigger", ""),
                     "realized_pnl": trade.realized_pnl,
                     "duration_s": duration_s,
+                    "legs": [
+                        {"symbol": l.symbol, "fill_price": float(l.fill_price) if l.fill_price is not None else None, "filled_qty": l.filled_qty}
+                        for l in trade.close_legs
+                    ],
+                    "fee_total": float(trade.total_fees) if trade.total_fees else None,
+                    "denomination": trade.currency.value if trade.currency else None,
                 })
 
-        elif result == "failed":
-            logger.error(f"Trade {trade.id}: close fill manager exhausted requote rounds")
-            _sync_fills(trade.close_legs, mgr.filled_legs)
+        elif result.status == FillStatus.FAILED:
+            logger.error(f"Trade {trade.id}: close fill manager exhausted phases")
+            _sync_fills(trade.close_legs, mgr.legs)
             mgr.cancel_all()
             trade.state = TradeState.PENDING_CLOSE
 
-        elif result == "requoted":
-            _sync_fills(trade.close_legs, mgr.filled_legs)
+        elif result.status == FillStatus.REQUOTED:
+            _sync_fills(trade.close_legs, mgr.legs)
             logger.debug(f"Trade {trade.id}: requoted unfilled close legs, continuing")
 
     def _unwind_filled_legs(self, trade: TradeLifecycle, filled_legs: List[TradeLeg]) -> None:
@@ -349,15 +469,17 @@ class LifecycleEngine:
         self._order_manager.cancel_all_for(trade.id)
 
         # Synthesize close legs at price 0 (expired worthless)
+        # Only include legs that were actually filled on open
         trade.close_legs = [
             TradeLeg(
                 symbol=leg.symbol,
-                qty=leg.filled_qty if leg.filled_qty > 0 else leg.qty,
+                qty=leg.filled_qty,
                 side=leg.close_side,
                 fill_price=0.0,
-                filled_qty=leg.filled_qty if leg.filled_qty > 0 else leg.qty,
+                filled_qty=leg.filled_qty,
             )
             for leg in trade.open_legs
+            if leg.filled_qty > 0
         ]
         trade.state = TradeState.CLOSED
         trade.closed_at = time.time()
@@ -487,12 +609,16 @@ class LifecycleEngine:
             return self.cancel(trade_id)
 
         if state == TradeState.CLOSING:
-            mgr: Optional[LimitFillManager] = trade.metadata.get("_close_fill_mgr")
+            mgr: Optional[FillManager] = trade.metadata.get("_close_fill_mgr")
             if mgr is not None:
-                for ls, leg in zip(mgr.filled_legs, trade.close_legs):
-                    leg.order_id = ls.order_id
-                    leg.filled_qty = ls.filled_qty
-                    leg.fill_price = ls.fill_price
+                fill_by_symbol = {ls.symbol: ls for ls in mgr.legs}
+                _currency = mgr.detected_currency
+                for leg in trade.close_legs:
+                    ls = fill_by_symbol.get(leg.symbol)
+                    if ls:
+                        leg.order_id = ls.order_id
+                        leg.filled_qty = ls.filled_qty
+                        leg.fill_price = _to_price(ls.fill_price, _currency)
                 mgr.cancel_all()
             else:
                 self._router.cancel_placed_orders(trade.close_legs)
@@ -546,12 +672,16 @@ class LifecycleEngine:
             logger.warning(f"Trade {trade.id}: cannot cancel in state {trade.state.value}")
             return False
 
-        mgr: Optional[LimitFillManager] = trade.metadata.get("_open_fill_mgr")
+        mgr: Optional[FillManager] = trade.metadata.get("_open_fill_mgr")
         if mgr is not None:
-            for ls, leg in zip(mgr.filled_legs, trade.open_legs):
-                leg.order_id = ls.order_id
-                leg.filled_qty = ls.filled_qty
-                leg.fill_price = ls.fill_price
+            fill_by_symbol = {ls.symbol: ls for ls in mgr.legs}
+            _currency = mgr.detected_currency
+            for leg in trade.open_legs:
+                ls = fill_by_symbol.get(leg.symbol)
+                if ls:
+                    leg.order_id = ls.order_id
+                    leg.filled_qty = ls.filled_qty
+                    leg.fill_price = _to_price(ls.fill_price, _currency)
             mgr.cancel_all()
             logger.info(f"Trade {trade.id}: cancelled unfilled orders via fill manager")
         else:

@@ -5,6 +5,85 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.16.0] - 2026-04-19
+
+### Added — `execution/` Package (Execution Layer Refactoring Phase 1-3)
+
+- **`execution/currency.py`** — `Currency` enum (`BTC`, `USD`), `Price(amount, currency)` value type with arithmetic operators, `OrderbookSnapshot` dataclass, `DenominationError` for mismatched-currency safety checks
+- **`execution/pricing.py`** — `PricingEngine.compute()` — stateless pricing logic extracted from `LimitFillManager._get_phased_price()`; accepts `OrderbookSnapshot` + `ExecutionPhase` + `side` → returns `Optional[Price]`; supports all pricing modes (aggressive, mid, passive, top_of_book, mark, fair)
+- **`execution/fees.py`** — `extract_fee()` parses exchange `_trades` response into a `Price`; `sum_fees()` aggregates a list of fee `Price` objects; `estimate_fee()` for pre-trade fee estimation
+- **`execution/fill_manager.py`** — `FillManager` extracted from `LimitFillManager` with typed `Price` fills, `OrderbookSnapshot` inputs, and `FillResult` outputs
+- **`execution/fill_result.py`** — `FillResult` and `FillStatus` dataclasses returned by `FillManager` and `Router`; replaces ad-hoc boolean/dict return values
+- **`execution/router.py`** — `Router` replaces `ExecutionRouter`; delegates to `FillManager` or RFQ based on execution mode; returns typed `FillResult`
+- **`execution/profiles.py`** — `ExecutionProfile` dataclass loaded from TOML; `load_profiles()` reads `execution_profiles.toml`; `get_profile()` lookup with fallback
+- **`execution/__init__.py`** — Package init with public API re-exports
+- **`execution_profiles.toml`** — Declarative execution profiles (phase durations, pricing modes, buffer percentages) configurable per slot
+
+### Changed — Lifecycle Engine: Typed Execution
+
+- **`lifecycle_engine.py`** — Imports replaced: `ExecutionRouter` → `Router`, `LimitFillManager` → `FillManager`; `open()` now returns `bool` based on `FillStatus`; captures `open_fees` from immediate fills (RFQ path); uses `_to_price()` helper for fill price conversion; accepts `expected_denomination: Currency` parameter passed through to `OrderManager`
+- **`trade_lifecycle.py`** — `TradeLeg.fill_price` type widened to `Any` (accepts `Price` or `float`); removed `float()` coercion in `__post_init__`; added standalone `executable_pnl()` function for live PnL calculation; imports `Price`, `Currency`, `sum_fees` from execution package
+
+### Changed — Order Manager: Fee Capture & Denomination Safety
+
+- **`order_manager.py`** — `OrderRecord` gains `fee: Optional[Price]` field; `price` field widened to `Price | float`; serialization handles `Price.to_dict()` / `Price.from_dict()` round-trip; imports `Currency`, `DenominationError`, `Price` from `execution.currency` and `extract_fee` from `execution.fees`; accepts `expected_denomination` parameter for denomination validation
+
+### Changed — Trade Execution: Pricing Delegation
+
+- **`trade_execution.py`** — `LimitFillManager._get_phased_price()` now delegates to `PricingEngine.compute()` instead of inline pricing logic; imports `PricingEngine`, `Currency`, `OrderbookSnapshot`, `Price` from execution package; ~130 lines of pricing code removed
+
+### Changed — Strategy Framework: Execution Profiles
+
+- **`strategy.py`** — `TradingContext` gains `profiles: Dict[str, ExecutionProfile]`; `build_context()` calls `load_profiles()` and passes `expected_denomination=Currency.BTC`; `StrategyConfig` gains `execution_profile: Optional[str]`; `StrategyRunner` reads `EXECUTION_PROFILE` and `EXECUTION_OVERRIDE_*` env vars for per-slot overrides
+- **`strategies/long_strangle_index_move.py`** — Removed inline `ExecutionParams`/`ExecutionPhase` imports and hardcoded close phases; close execution now handled by execution profile; removed `_leg_fee_btc()` helper, uses `trade.open_fees` instead
+- **`strategies/put_sell_80dte.py`** — Updated to use execution profiles; removed direct `ExecutionParams` usage
+- **`strategies/short_strangle_delta_tp.py`** — Updated to use execution profiles; removed direct `ExecutionParams` usage
+
+### Changed — Position Closer: Kill Switch Improvements
+
+- **`position_closer.py`** — Kills lifecycle-managed trades (cancels fill managers + orders) before closing exchange positions; adds Telegram notifications at each stage; exchange compatibility for Coincall (USD) and Deribit (BTC) denomination
+
+### Changed — Slot Config: Execution Profile Support
+
+- **`slot_config.py`** — `generate_env()` now emits `EXECUTION_PROFILE=<name>` and `EXECUTION_OVERRIDE_*` env vars from slot TOML config
+
+### Changed — Minor
+
+- **`exchanges/deribit/market_data.py`** — Minor denomination comment updates
+- **`market_data.py`** — Added import for execution currency types
+- **`telegram_notifier.py`** — Minor formatting fix
+
+### Removed
+
+- **`execution_router.py`** — Deleted; replaced by `execution/router.py`
+- **`tests/test_execution_params.py`** — Deleted; replaced by `tests/test_execution_profiles.py`
+- **`tests/test_fill_manager.py`** — Deleted; replaced by `tests/test_execution_fill_manager.py`
+
+### Added — Tests
+
+- **`tests/test_currency.py`** — Tests for `Currency`, `Price` arithmetic, `OrderbookSnapshot`, `DenominationError`
+- **`tests/test_execution_cleanup.py`** — Tests for execution cleanup and teardown
+- **`tests/test_execution_fill_manager.py`** — Tests for `FillManager` (replaces `test_fill_manager.py`)
+- **`tests/test_execution_profiles.py`** — Tests for `ExecutionProfile` loading, `get_profile()` fallback, TOML parsing
+- **`tests/test_execution_router.py`** — Tests for `Router` dispatch logic
+- **`tests/test_fees.py`** — Tests for `extract_fee()`, `sum_fees()`, `estimate_fee()`
+- **`tests/test_multileg_execution.py`** — Tests for multi-leg atomic execution
+- **`tests/test_position_closer.py`** — Tests for `PositionCloser` kill switch
+- **`tests/test_pricing_engine.py`** — Tests for `PricingEngine.compute()` across all pricing modes
+- **`tests/test_strategy_profiles.py`** — Tests for strategy execution profile integration
+- **`tests/live/test_denomination_live.py`** — Live test for denomination consistency
+- **`tests/live/test_fill_live.py`** — Live fill manager tests on Deribit testnet
+- **`tests/live/test_full_lifecycle_live.py`** — End-to-end live lifecycle test
+- **`tests/live/test_iron_condor_v2.py`** — Live iron condor v2 test
+- **`tests/live/test_pricing_live.py`** — Live pricing engine tests
+- **`tests/live/test_strategy_live.py`** — Live strategy integration tests
+
+### Updated — Documentation
+
+- **`docs/API_REFERENCE.md`** — Updated API reference for new execution package
+- **`docs/MODULE_REFERENCE.md`** — Updated module reference with execution package documentation
+- **`docs/upgrades/execution-layer-refactoring.md`** — Updated plan to reflect completed phases 1-3
+
 ## [1.15.1] - 2026-04-19
 
 ### Added — Execution Layer Refactoring Plan

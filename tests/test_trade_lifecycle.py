@@ -57,10 +57,18 @@ class TestTradeLeg:
         leg2 = TradeLeg(symbol="X", qty=1, side=2)
         assert leg2.side == "sell"
 
-    def test_fill_price_cast_to_float(self):
-        leg = TradeLeg(symbol="X", qty=1, side="buy", fill_price="500")
+    def test_fill_price_accepts_price_object(self):
+        """TradeLeg accepts Price objects for fill_price (Phase 3)."""
+        from execution.currency import Price, Currency
+        p = Price(0.0100, Currency.BTC)
+        leg = TradeLeg(symbol="X", qty=1, side="buy", fill_price=p)
+        assert leg.fill_price is p
+        assert float(leg.fill_price) == 0.0100
+
+    def test_fill_price_accepts_float(self):
+        """TradeLeg still accepts float for fill_price (backward compat)."""
+        leg = TradeLeg(symbol="X", qty=1, side="buy", fill_price=500.0)
         assert leg.fill_price == 500.0
-        assert isinstance(leg.fill_price, float)
 
 
 # ── TradeLifecycle state ─────────────────────────────────────────────────
@@ -222,3 +230,75 @@ class TestSerialization:
         restored = TradeLifecycle.from_dict(d)
         assert restored.realized_pnl == 42.5
         assert restored.exit_cost == 17.3
+
+
+# ── Phase 3: Currency type safety ────────────────────────────────────────
+
+class TestPhase3PriceFillPrice:
+    """Phase 3: TradeLeg.fill_price as Price — serialization, PnL math."""
+
+    def test_round_trip_price_fill_price(self):
+        """Price fill_price round-trips through to_dict/from_dict."""
+        from execution.currency import Price, Currency
+        p = Price(0.0100, Currency.BTC)
+        t = TradeLifecycle(
+            id="p3-rt",
+            state=TradeState.OPEN,
+            open_legs=[
+                TradeLeg(symbol="BTC-P", qty=0.5, side="sell",
+                         fill_price=p, filled_qty=0.5),
+            ],
+            close_legs=[],
+        )
+        d = t.to_dict()
+        # fill_price serialized as dict
+        assert isinstance(d["open_legs"][0]["fill_price"], dict)
+        assert d["open_legs"][0]["fill_price"]["amount"] == 0.0100
+        assert d["open_legs"][0]["fill_price"]["currency"] == "BTC"
+
+        restored = TradeLifecycle.from_dict(d)
+        fp = restored.open_legs[0].fill_price
+        assert isinstance(fp, Price)
+        assert fp.amount == 0.0100
+        assert fp.currency == Currency.BTC
+
+    def test_round_trip_float_fill_price_backward_compat(self):
+        """Float fill_price still round-trips (backward compat)."""
+        t = TradeLifecycle(
+            id="p3-float",
+            state=TradeState.OPEN,
+            open_legs=[
+                TradeLeg(symbol="BTC-P", qty=0.5, side="sell",
+                         fill_price=100.0, filled_qty=0.5),
+            ],
+            close_legs=[],
+        )
+        d = t.to_dict()
+        assert d["open_legs"][0]["fill_price"] == 100.0
+
+        restored = TradeLifecycle.from_dict(d)
+        assert restored.open_legs[0].fill_price == 100.0
+
+    def test_pnl_with_price_fill_price(self):
+        """total_entry_cost / total_exit_cost work with Price fill_price."""
+        from execution.currency import Price, Currency
+        t = TradeLifecycle(
+            id="p3-pnl",
+            state=TradeState.CLOSED,
+            open_legs=[
+                TradeLeg(symbol="BTC-P", qty=1.0, side="sell",
+                         fill_price=Price(0.0100, Currency.BTC), filled_qty=1.0),
+            ],
+            close_legs=[
+                TradeLeg(symbol="BTC-P", qty=1.0, side="buy",
+                         fill_price=Price(0.0050, Currency.BTC), filled_qty=1.0),
+            ],
+        )
+        entry = t.total_entry_cost()
+        exit_ = t.total_exit_cost()
+        assert entry == pytest.approx(-0.0100)  # sell → credit
+        assert exit_ == pytest.approx(0.0050)   # buy → debit
+
+        t._finalize_close()
+        # PnL = -(entry + exit) = -(-0.01 + 0.005) = 0.005
+        assert t.realized_pnl == pytest.approx(0.005)

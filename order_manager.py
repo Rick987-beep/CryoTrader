@@ -14,9 +14,8 @@ Design principles (from ORDER_MANAGEMENT_PLAN.md):
 
 Usage:
     from order_manager import OrderManager, OrderPurpose
-    from trade_execution import TradeExecutor
 
-    om = OrderManager(TradeExecutor())
+    om = OrderManager(executor)  # any ExchangeExecutor implementation
 
     record = om.place_order(
         lifecycle_id="abc123",
@@ -46,6 +45,9 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
+
+from execution.currency import Currency, DenominationError, Price
+from execution.fees import extract_fee
 
 logger = logging.getLogger(__name__)
 _execution_logger = logging.getLogger("ct.execution")  # structured JSONL → logs/execution.jsonl
@@ -120,7 +122,7 @@ class OrderRecord:
     symbol: str = ""
     side: str = "buy"
     qty: float = 0.0
-    price: float = 0.0
+    price: Any = 0.0  # Price object (preferred) or float (legacy)
     reduce_only: bool = False
 
     # Status (updated by poll)
@@ -132,6 +134,9 @@ class OrderRecord:
     placed_at: float = field(default_factory=time.time)
     updated_at: Optional[float] = None
     terminal_at: Optional[float] = None
+
+    # Fee captured from executor response _trades array
+    fee: Optional[Price] = None
 
     # Supersession chain
     superseded_by: Optional[str] = None
@@ -155,7 +160,7 @@ class OrderRecord:
             "symbol": self.symbol,
             "side": self.side,
             "qty": self.qty,
-            "price": self.price,
+            "price": self.price.to_dict() if isinstance(self.price, Price) else self.price,
             "reduce_only": self.reduce_only,
             "status": self.status.value,
             "filled_qty": self.filled_qty,
@@ -165,6 +170,7 @@ class OrderRecord:
             "terminal_at": self.terminal_at,
             "superseded_by": self.superseded_by,
             "supersedes": self.supersedes,
+            "fee": self.fee.to_dict() if self.fee else None,
         }
 
     @staticmethod
@@ -182,7 +188,7 @@ class OrderRecord:
             symbol=d.get("symbol", ""),
             side=raw_side,
             qty=d.get("qty", 0.0),
-            price=d.get("price", 0.0),
+            price=Price.from_dict(d["price"]) if isinstance(d.get("price"), dict) else d.get("price", 0.0),
             reduce_only=d.get("reduce_only", False),
             status=OrderStatus(d.get("status", "pending")),
             filled_qty=d.get("filled_qty", 0.0),
@@ -192,6 +198,7 @@ class OrderRecord:
             terminal_at=d.get("terminal_at"),
             superseded_by=d.get("superseded_by"),
             supersedes=d.get("supersedes"),
+            fee=Price.from_dict(d["fee"]) if d.get("fee") else None,
         )
 
 
@@ -208,15 +215,19 @@ class OrderManager:
     MAX_ORDERS_PER_LIFECYCLE: int = 30
     MAX_PENDING_PER_SYMBOL: int = 4
 
-    def __init__(self, executor: Any, exchange_state_map: dict = None):
+    def __init__(self, executor: Any, exchange_state_map: dict = None,
+                 expected_denomination: Optional[Currency] = None):
         """
         Args:
             executor: ExchangeExecutor instance (or mock for testing).
             exchange_state_map: Mapping of exchange state codes to OrderStatus.
                 Defaults to Coincall state map if not provided.
+            expected_denomination: If set, place_order() will reject Price
+                objects whose currency doesn't match (DenominationError).
         """
         self._executor = executor
         self._state_map = exchange_state_map if exchange_state_map is not None else _EXCHANGE_STATE_MAP
+        self._expected_denomination = expected_denomination
         self._orders: Dict[str, OrderRecord] = {}  # order_id → record
         # Secondary index: (lifecycle_id, leg_index, purpose) → order_id
         self._active_by_key: Dict[Tuple[str, int, str], str] = {}
@@ -232,7 +243,7 @@ class OrderManager:
         symbol: str,
         side: str,
         qty: float,
-        price: float,
+        price: Any,  # Price object (preferred) or float (legacy)
         reduce_only: bool = False,
     ) -> Optional[OrderRecord]:
         """
@@ -292,13 +303,24 @@ class OrderManager:
         self._next_client_id += 1
         client_order_id = str(self._next_client_id)
 
+        # --- Denomination guard ---
+        if isinstance(price, Price) and self._expected_denomination is not None:
+            if price.currency != self._expected_denomination:
+                raise DenominationError(
+                    f"Price denomination mismatch: got {price.currency.value}, "
+                    f"expected {self._expected_denomination.value} for {symbol}"
+                )
+
+        # --- Extract numeric price for executor ---
+        price_for_executor = price.amount if isinstance(price, Price) else float(price)
+
         # --- Place via executor ---
         result = self._executor.place_order(
             symbol=symbol,
             qty=qty,
             side=side,
             order_type=1,
-            price=price,
+            price=price_for_executor,
             client_order_id=client_order_id,
             reduce_only=reduce_only,
         )
@@ -311,8 +333,23 @@ class OrderManager:
             logger.error(f"OrderManager: executor returned no orderId for {symbol}")
             return None
 
+        # --- Extract fee from immediate fills (if any) ---
+        trades = result.get("_trades", [])
+        fee_currency = price.currency if isinstance(price, Price) else Currency.BTC
+        fee = extract_fee(trades, fee_currency) if trades else None
+
+        # --- Capture fill info from immediate fills ---
+        fill_qty = float(result.get("fillQty", 0))
+        avg_price = float(result.get("avgPrice", 0))
+
         # --- Record in ledger ---
         now = time.time()
+        status = OrderStatus.PENDING
+        if fill_qty >= qty:
+            status = OrderStatus.FILLED
+        elif fill_qty > 0:
+            status = OrderStatus.PARTIAL
+
         record = OrderRecord(
             order_id=order_id,
             client_order_id=client_order_id,
@@ -324,8 +361,12 @@ class OrderManager:
             qty=qty,
             price=price,
             reduce_only=reduce_only,
-            status=OrderStatus.PENDING,
+            status=status,
+            filled_qty=fill_qty,
+            avg_fill_price=avg_price if avg_price > 0 else None,
+            fee=fee,
             placed_at=now,
+            terminal_at=now if status == OrderStatus.FILLED else None,
         )
         self._orders[order_id] = record
         self._active_by_key[key] = order_id
@@ -343,7 +384,7 @@ class OrderManager:
             "symbol": symbol,
             "side": side,
             "qty": qty,
-            "price": price,
+            "price": float(price),
             "purpose": purpose.value,
         })
         return record
@@ -401,7 +442,7 @@ class OrderManager:
     def requote_order(
         self,
         order_id: str,
-        new_price: float,
+        new_price: Any,  # Price object (preferred) or float (legacy)
         new_qty: Optional[float] = None,
     ) -> Optional[OrderRecord]:
         """
@@ -469,8 +510,8 @@ class OrderManager:
             "old_order_id": order_id,
             "new_order_id": replacement.order_id,
             "symbol": record.symbol,
-            "old_price": record.price,
-            "new_price": new_price,
+            "old_price": float(record.price),
+            "new_price": float(new_price),
         })
         return replacement
 
@@ -677,7 +718,7 @@ class OrderManager:
             "symbol": record.symbol,
             "side": record.side,
             "qty": record.qty,
-            "price": record.price,
+            "price": float(record.price),
             "status": record.status.value,
             "filled_qty": record.filled_qty,
         }

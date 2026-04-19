@@ -1,8 +1,29 @@
 # Execution Layer Refactoring — Review & Implementation Plan
 
 **Date:** 2026-04-15  
-**Status:** Proposal  
+**Status:** Complete (as of 2026-04-19)  
 **Scope:** The "lower" trade execution layer — everything below `LifecycleEngine` that places orders, calculates prices, tracks order state, and reports results.
+
+### Implementation Summary
+
+All 5 phases implemented across ~8 sessions. The `execution/` package is live in production.
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| Phase 1: Extract & Structure | Done | `execution/` package created with 7 modules: `currency.py`, `pricing.py`, `profiles.py`, `fill_result.py`, `fees.py`, `fill_manager.py`, `router.py` |
+| Phase 2: FillManager & FillResult | Done | `FillManager` returns typed `FillResult`. Fee capture from Deribit trade records via `extract_fee()`/`sum_fees()`. |
+| Phase 3: Currency Type Safety | Done | `Price` value objects propagate through the system. `TradeLeg.fill_price` is `Optional[Price]`. `trade.currency` auto-detected from fills. |
+| Phase 4: Profiles & Strategy Rewrites | Done | 3 strategies rewritten (`short_strangle_delta_tp`, `put_sell_80dte`, `long_strangle_index_move`). Named profiles in `execution_profiles.toml`. |
+| Phase 5: Live Testing & Cleanup | Done | `execution_router.py` deleted (moved to `execution/router.py`). Legacy `ExecutionParams`/`ExecutionPhase` preserved in `trade_execution.py` for backward compat via `_bridge_params_to_profile()`. Iron condor v2 live test added to test suite. |
+
+### Deviations from Plan
+
+- **TOML format:** Profiles use numbered phases (`[profile.NAME.open_phase_1]`) instead of the originally planned array-of-tables (`[[profile.NAME.open_phases]]`). More human-readable.
+- **Backward compatibility bridge:** `_bridge_params_to_profile()` in `fill_manager.py` converts legacy `ExecutionParams` to an `ExecutionProfile` at runtime. This allows `daily_put_sell` and other non-ported strategies to work without rewriting.
+- **`executable_pnl()` not moved:** Still on `TradeLifecycle` (does I/O). Deferred — low priority since it's only used in dashboard display.
+- **RFQ hybrid mode:** Declared in `ExecutionProfile.rfq_mode` field but not exercised in production. RFQ is Coincall-only and dormant.
+- **`trade.metadata` cleanup:** Fill managers still stashed in `metadata["_open_fill_mgr"]`/`metadata["_close_fill_mgr"]`. Moving to typed fields would require `TradeLifecycle` changes and persistence migration — deferred.
+- **Test count:** 548 unit tests (vs ~370 estimated), 25+ live tests on Deribit testnet.
 
 ---
 
@@ -695,6 +716,7 @@ New file: `execution_profiles.toml` — a catalogue of reusable standard profile
 # Standard execution profile library.
 # Strategies can use these by name, define their own inline, or mix both.
 # Phases are numbered: open_phase_1, open_phase_2, ... (executed in order).
+# This makes it immediately clear which phase you're editing.
 #
 # DENOMINATION CONVENTION: All price values (min_floor_price, buffer amounts)
 # are in the exchange's native denomination: BTC for Deribit options, USD for
@@ -702,110 +724,108 @@ New file: `execution_profiles.toml` — a catalogue of reusable standard profile
 # use a Coincall-denominated floor price.
 
 # ── Passive 3-phase open (put_sell_80dte default) ──────────────────────
-[profiles.passive_open_3phase]
+[profile.passive_open_3phase]
 open_atomic = true
-max_requote_rounds = 10
-
-[profiles.passive_open_3phase.open_phase_1]
-pricing = "fair"
-duration_seconds = 45
-reprice_interval = 45
-
-[profiles.passive_open_3phase.open_phase_2]
-pricing = "fair"
-fair_aggression = 0.33
-duration_seconds = 45
-reprice_interval = 45
-min_price_pct_of_fair = 0.83
-
-[profiles.passive_open_3phase.open_phase_3]
-pricing = "top_of_book"
-duration_seconds = 60
-reprice_interval = 30
-min_price_pct_of_fair = 0.83
-
-
-# ── SL close 3-phase (put_sell_80dte default) ─────────────────────────
-[profiles.sl_close_3phase]
 close_best_effort = true
-max_close_attempts = 10
-max_requote_rounds = 10
+rfq_mode = "never"
 
-[profiles.sl_close_3phase.close_phase_1]
+[profile.passive_open_3phase.open_phase_1]
 pricing = "fair"
 fair_aggression = 0.0
-duration_seconds = 15
-reprice_interval = 15
+duration_seconds = 45.0
+reprice_interval = 45.0
 
-[profiles.sl_close_3phase.close_phase_2]
+[profile.passive_open_3phase.open_phase_2]
 pricing = "fair"
-fair_aggression = 0.33
-duration_seconds = 15
-reprice_interval = 15
+fair_aggression = 0.67
+duration_seconds = 45.0
+reprice_interval = 45.0
+min_price_pct_of_fair = 0.83
 
-[profiles.sl_close_3phase.close_phase_3]
+[profile.passive_open_3phase.open_phase_3]
 pricing = "fair"
 fair_aggression = 1.0
-duration_seconds = 60
-reprice_interval = 15
+duration_seconds = 60.0
+reprice_interval = 15.0
+min_price_pct_of_fair = 0.83
+
+[profile.passive_open_3phase.close_phase_1]
+pricing = "fair"
+fair_aggression = 0.0
+duration_seconds = 15.0
+reprice_interval = 15.0
+
+[profile.passive_open_3phase.close_phase_2]
+pricing = "fair"
+fair_aggression = 0.33
+duration_seconds = 15.0
+reprice_interval = 15.0
+
+[profile.passive_open_3phase.close_phase_3]
+pricing = "fair"
+fair_aggression = 1.0
+duration_seconds = 60.0
+reprice_interval = 15.0
 
 
 # ── Aggressive 2-phase (short_strangle_delta_tp default) ──────────────
-[profiles.aggressive_2phase]
+[profile.aggressive_2phase]
 open_atomic = true
 close_best_effort = true
-max_close_attempts = 10
-max_requote_rounds = 10
+rfq_mode = "never"
 
-[profiles.aggressive_2phase.open_phase_1]
+[profile.aggressive_2phase.open_phase_1]
 pricing = "fair"
-duration_seconds = 30
-reprice_interval = 30
+fair_aggression = 0.0
+duration_seconds = 30.0
+reprice_interval = 30.0
 
-[profiles.aggressive_2phase.open_phase_2]
-pricing = "aggressive"
-buffer_pct = 2.0
-duration_seconds = 180
-reprice_interval = 30
-
-[profiles.aggressive_2phase.close_phase_1]
+[profile.aggressive_2phase.open_phase_2]
 pricing = "fair"
-duration_seconds = 30
-reprice_interval = 30
+fair_aggression = 1.0
+duration_seconds = 30.0
+reprice_interval = 15.0
 
-[profiles.aggressive_2phase.close_phase_2]
-pricing = "aggressive"
-buffer_pct = 2.0
-duration_seconds = 180
-reprice_interval = 30
+[profile.aggressive_2phase.close_phase_1]
+pricing = "fair"
+fair_aggression = 0.0
+duration_seconds = 30.0
+reprice_interval = 30.0
+
+[profile.aggressive_2phase.close_phase_2]
+pricing = "fair"
+fair_aggression = 1.0
+duration_seconds = 60.0
+reprice_interval = 15.0
 min_floor_price = 0.0001
 
 
 # ── Single-phase fallback ─────────────────────────────────────────────
-[profiles.default_single_phase]
+[profile.default_single_phase]
 open_atomic = true
 close_best_effort = true
-max_close_attempts = 10
-max_requote_rounds = 10
+rfq_mode = "never"
 
-[profiles.default_single_phase.open_phase_1]
+[profile.default_single_phase.open_phase_1]
 pricing = "aggressive"
 buffer_pct = 2.0
-duration_seconds = 30
-reprice_interval = 30
+duration_seconds = 30.0
+reprice_interval = 30.0
 
-[profiles.default_single_phase.close_phase_1]
+[profile.default_single_phase.close_phase_1]
 pricing = "aggressive"
 buffer_pct = 2.0
-duration_seconds = 30
-reprice_interval = 30
+duration_seconds = 30.0
+reprice_interval = 30.0
 ```
 
 The loader collects keys matching `open_phase_*` / `close_phase_*`, sorts by suffix number, and builds the ordered phase list.
 
 ### 7.6 Per-Slot Overrides
 
-Slot TOML files can override profile parameters:
+Slot TOML files can override profile parameters. The override API uses
+`open_phase_N` / `close_phase_N` numbered keys (1-based) to target a
+specific phase by position:
 
 ```toml
 # slots/slot-01.toml
@@ -813,14 +833,12 @@ Slot TOML files can override profile parameters:
 name = "put_sell_80dte"
 
 [execution]
-open_profile = "passive_open_3phase"
-close_profile = "sl_close_3phase"
+profile = "passive_open_3phase"
 
 # Override specific phase parameters for this slot:
 [execution.overrides]
 "open_phase_1.duration_seconds" = 60
 "close_phase_3.duration_seconds" = 90
-"max_close_attempts" = 15
 ```
 
 ---
@@ -1179,7 +1197,7 @@ Run `python -m pytest tests/ -v`. All ~330+ existing tests must still pass (extr
 | 2.1 | Create `execution/fill_manager.py`: new `FillManager` class that uses `PricingEngine` and returns `FillResult`. N-leg aware (variable number of legs). |
 | 2.2 | Remove legacy mode from fill manager (convert any strategy using flat `ExecutionParams` to a 1-phase profile) |
 | 2.3 | Create `execution/router.py`: migrate from `execution_router.py`, add RFQ hybrid routing (try RFQ first → limit fallback on timeout/rejection) |
-| 2.4 | Update `order_manager.py`: capture fee from exchange order response into `OrderRecord.fee: Optional[Price]` (native denomination) |
+| 2.4 | Update `order_manager.py`: capture fee from exchange order response into `OrderRecord.fee: Optional[Price]` (native denomination). Note: Deribit returns fee data inside the `_trades` array of the executor response (one fee per partial fill); `OrderManager` must sum these into a single `Price` when recording a fill. |
 | 2.5 | Wire fee data through `FillResult`: `LegFillSnapshot.fee` → `FillResult.total_fees` (as `Price` in native denomination) |
 | 2.6 | Update `lifecycle_engine.py`: replace `_check_open_fills` / `_check_close_fills` manual sync with `result.sync_to_trade_legs()`. Replace string comparisons with `FillStatus` enum checks. Emit structured events to `ct.execution` logger. |
 | 2.7 | Add `currency: Currency` field to `TradeLifecycle` (set at creation from exchange adapter). Add `open_fees`, `close_fees`, `total_fees` (as `Price`, native denomination) + `*_usd` variants. Add `realized_pnl: Optional[Price]` + `realized_pnl_usd: Optional[float]` (replaces old bare `realized_pnl: float`). Remove `metadata["_open_fill_mgr"]` / `metadata["_close_fill_mgr"]` stashing |
@@ -1198,7 +1216,7 @@ Run `python -m pytest tests/ -v`. All existing tests updated to the new types mu
 - `test_fill_manager.py`: Mock `OrderManager` and `PricingEngine`. Test a 2-leg strangle open: instantiate `FillManager` with a 2-phase profile, call `tick()` repeatedly, verify it transitions from phase 1 → phase 2 after `duration_seconds`. Verify it calls `pricing_engine.compute()` with the correct mode per phase. Verify `FillResult.status` goes `PENDING → OPEN → FILLED` as mocked fills arrive. Test `best_effort` close: one leg fills, the other stays unfilled after all phases → result is `PARTIAL`. Test `cancel_all()` cleans up open orders. Test N-leg: 4-leg iron condor with 3 fills and 1 unfilled → verify `FillResult.legs` has correct per-leg status. Test grace tick: after all phases exhaust, first `.check()` returns `PENDING` (grace), second `.check()` does a final poll and returns `FILLED` if a late fill arrived, or `FAILED` otherwise. Test that `FillResult.legs[].fee` is `Price` with correct denomination when exchange reports fees. ~35 cases.
 - `test_execution_router.py`: Test that `route(notional=500, profile=...)` returns a `LimitRoute` for small notional. Test that a profile with `rfq_mode="hybrid"` first attempts RFQ (mock `rfq.request_quote()` returning a quote), and on timeout falls back to limit. Test that `rfq_mode="always"` skips limit entirely. Test `rfq_mode="never"` (default) never calls RFQ. ~20 cases.
 
-**Live test (Deribit testnet):** `tests/live/test_fill_live.py` — Place a real limit order on a deep-OTM BTC option via `FillManager` with a 1-phase aggressive profile. Use a price far below the ask so it rests in the book without filling. Verify `OrderManager.get_open_orders()` shows the order. Then cancel it. Verify it disappears. This validates the full place → track → cancel path against the real API. Then test an actual fill: pick the cheapest deep-OTM option (e.g. 0.0001 BTC), place an aggressive buy at the ask. Wait up to 10 seconds for fill. If filled, verify `FillResult.legs[0].fill_price` is populated and `FillResult.legs[0].fee` is non-None (Deribit always returns fee data on fills). Use a `finally` block to cancel any unfilled orders. Mark `@pytest.mark.live`.
+**Live test (Deribit testnet):** `tests/live/test_fill_live.py` — Place a real limit order on a deep-OTM BTC option via `FillManager` with a 1-phase aggressive profile. Use a price far below the ask (get best ask from `orderbook["asks"][0]["price"]`) so it rests in the book without filling. Verify the order exists via `OrderManager.get_live_orders(lifecycle_id)` (or `DeribitAccountAdapter.get_open_orders()` for exchange-level confirmation). Then cancel it via `OrderManager.cancel_order(order_id)`. Verify it disappears. This validates the full place → track → cancel path against the real API. Then test an actual fill: pick the cheapest deep-OTM option (e.g. 0.0001 BTC ask), place an aggressive buy at the ask. Wait up to 10 seconds for fill. If filled, verify `FillResult.legs[0].fill_price` is a `Price` with `currency == Currency.BTC` and `FillResult.legs[0].fee` is a non-None `Price` (Deribit returns per-fill fee data in the `_trades` array; step 2.4 extracts and sums it into `OrderRecord.fee`). Use a `finally` block to cancel any unfilled orders. Mark `@pytest.mark.live`.
 
 ### Phase 3: Currency Type Safety — ~1-2 sessions
 
@@ -1254,10 +1272,10 @@ Run `python -m pytest tests/ -v`. Strategy-level tests:
 
 **Live test (Deribit testnet):** `tests/live/test_strategy_live.py` — Run `put_sell_80dte` through a single open cycle on Deribit testnet. Use the real `passive_open_3phase` profile loaded from TOML. Pick a deep-OTM put (~10 delta) with >60 DTE. Execute the 3-phase open with real orderbook data and real limit orders. The test should:
 1. Start phase 1 (fair pricing), place a sell limit order, wait `duration_seconds`.
-2. Transition to phase 2, verify the order is repriced with `fair_aggression=0.33`.
-3. Transition to phase 3 (top_of_book), verify the order is repriced at the best bid.
+2. Transition to phase 2, verify the order is repriced with `fair_aggression=0.33` via `OrderManager.requote_order()` (cancel old + place new — there is no atomic `edit_order`; Deribit supports `/private/edit` but the adapter uses cancel-and-replace).
+3. Transition to phase 3 (top_of_book), verify the order is repriced at the best bid (from `orderbook["bids"][0]["price"]`).
 4. After all phases, cancel any unfilled orders in `finally`.
-5. Assert that at least 3 `place_order` / `edit_order` calls were made (one per phase) and that each used a different price.
+5. Assert that at least 3 `place_order` calls were made (one per phase, since requoting cancels + re-places) and that each used a different price.
 This does NOT need to result in a fill — it validates the phase machinery against the real API. If a fill happens (cheap option), verify `FillResult.status == FILLED` and fee is captured. Mark `@pytest.mark.live`.
 
 ### Phase 5: Live Testing & Cleanup — ~2 sessions
