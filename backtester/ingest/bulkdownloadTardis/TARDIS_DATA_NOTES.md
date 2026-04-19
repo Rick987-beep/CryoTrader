@@ -44,13 +44,15 @@ This is a day-level rescale, never a per-record one. The threshold 2.0 is safe b
 
 ## 2. NaN and Zero Price Policy
 
-After spot filtering, the remaining price fields (bid, ask, mark, IV, delta) may still be `NaN`. These are replaced with `0.0`.
+After spot filtering, the remaining price fields (bid, ask, mark, IV, delta) may still be `NaN`. These are **preserved as `NaN`** in the output parquet — they are NOT replaced with `0.0`.
 
-**Convention: `0.0` means "data absent", not "price is zero".**
+**Convention (updated April 2026):**
+- **`NaN`** = "data absent from exchange" — the instrument was never ticked in this 5-min window, or the exchange did not provide this field. Must not be passed to any formula expecting a valid price.
+- **`0.0`** = "exchange reported this value as zero" — e.g. a real zero bid on a far-OTM option with no market maker interest. This is genuine market data.
 
-No option can legitimately have price 0.0 in the data; the exchange only emits a quote when it has pricing. So `0.0` is an unambiguous sentinel. Any downstream consumer should treat `bid == 0` as "no bid quote exists at this timestamp" — it must not be passed to any formula expecting a valid price.
+Downstream consumers should check `isnan(value)` to detect absent data, and treat `0.0` as a real exchange-reported value.
 
-All `NaN` values are normalized to `0.0` at clean time.
+Parquet stores `NaN` natively in float32 columns. Pandas reads these as `NaN` automatically.
 
 ---
 

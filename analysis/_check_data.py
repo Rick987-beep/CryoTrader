@@ -1,7 +1,7 @@
 """Quick check: UTC timestamps and bid/ask data quality."""
 import pandas as pd
 
-df = pd.read_parquet("analysis/tardis_options/data/btc_0dte_1dte_2025-03-01.parquet")
+df = pd.read_parquet("backtester/ingest/tardis/data/btc_0dte_1dte_2025-03-01.parquet")
 
 ts_min, ts_max = df["timestamp"].min(), df["timestamp"].max()
 print("Timestamp range (microseconds since epoch):")

@@ -31,13 +31,12 @@ backtester/
 │
 ├── strategies/            # One file per strategy (implement Strategy protocol)
 │   ├── daily_put_sell.py
-│   ├── short_straddle_strangle.py
+│   ├── short_strangle_offset.py
 │   ├── short_strangle_delta.py
 │   ├── short_strangle_delta_tp.py
 │   ├── short_strangle_weekly_tp.py
 │   ├── short_strangle_weekly_cap.py
 │   ├── deltaswipswap.py
-│   ├── deltaswipswap1m.py
 │   └── straddle_strangle.py
 │
 ├── experiments/           # Per-experiment TOML files (sensitivity params + WFO config)
@@ -156,13 +155,12 @@ differentiation on short backtests.
 | CLI key | Class | Description |
 |---|---|---|
 | `put_sell` | `DailyPutSell` | Sell 1DTE OTM put, delta-selected; exit on SL or expiry |
-| `short_straddle` | `ShortStraddleStrangle` | Sell 1DTE ATM straddle / OTM strangle; SL + time/expiry exit |
+| `short_straddle` | `ShortStrangleOffset` | Sell 1DTE ATM straddle / OTM strangle; SL + time/expiry exit |
 | `delta_strangle` | `ShortStrangleDelta` | Sell N-DTE strangle, delta-selected; SL + time/expiry exit |
 | `delta_strangle_tp` | `ShortStrangleDeltaTp` | Same + take-profit: close when combined ask drops to (1−tp_pct) × entry premium |
 | `weekly_strangle_tp` | `ShortStrangleWeeklyTp` | Weekly-expiry strangle with take-profit |
 | `weekly_strangle_cap` | `ShortStrangleWeeklyCap` | Weekly-expiry strangle with premium cap at entry |
 | `deltaswipswap` | `DeltaSwipSwap` | Delta-selected swap entry; 5-min snapshot data |
-| `deltaswipswap1m` | `DeltaSwipSwap1m` | Same at 1-min resolution |
 | `straddle` | `ExtrusionStraddleStrangle` | Buy nearest-expiry straddle/strangle; exit on BTC index move |
 
 ---

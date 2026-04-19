@@ -6,14 +6,14 @@ This document is a complete, accurate manual for downloading and processing a fu
 
 ## What You Are Building
 
-365 days of 5-minute option chain snapshots and 1-minute spot OHLC bars, covering the Tardis subscription window. Output is two small parquet files per day:
+371 days of 5-minute option chain snapshots and 1-minute spot OHLC bars, covering the Tardis subscription window. All DTE options are included (monthlies, quarterlies — no DTE cap). Output is two small parquet files per day:
 
 ```
-data/options_YYYY-MM-DD.parquet   (~1-2 MB)   -- 5-min snapshots, ~86-165k rows/day
+data/options_YYYY-MM-DD.parquet   (~3-5 MB)   -- 5-min snapshots, ~200-350k rows/day
 data/spot_YYYY-MM-DD.parquet      (~20-35 KB) -- 1-min OHLC bars, ~1440 rows/day
 ```
 
-Total output for 365 days: ~800 MB. Total inbound data processed: ~2-3 TB (raw files deleted after extraction).
+Total output for 371 days: ~1.5 GB. Total inbound data processed: ~2-3 TB (raw files deleted after extraction).
 
 ---
 
@@ -38,7 +38,7 @@ curl -s "https://api.tardis.dev/v1/api-key-info" \
   -H "Authorization: Bearer $TARDIS_API_KEY" | python3 -m json.tool
 ```
 
-Check that the response includes `"exchange": "deribit"` and that the `from`/`to` dates cover the range you want. The `from` date is the earliest date you can download -- this sets your `--from` boundary for the workers.
+Check that the response includes `"exchange": "deribit"` and that the `from`/`to` dates cover the range you want. The current academic key covers **2025-04-11 to 2026-07-12** (deribit options plan). The `from` date is the earliest date you can download -- this sets your `--from` boundary for the workers.
 
 Free tier: only the 1st of each month is available without a key. Any other date requires a paid/academic key.
 
@@ -59,6 +59,9 @@ Run this on a Hetzner dedicated server, not a home machine. Home ISP caps make t
 | Price | 0.077 EUR/hr -- hourly billing, delete when done |
 
 Create at https://console.hetzner.com/ -> New Project -> Add Server -> Nuremberg -> Ubuntu 24.04 -> Dedicated -> CCX33. Add your SSH public key.
+
+**Current server (April 2026):** `46.225.129.121` (hostname: TardisDownload, CCX33, Ubuntu 24.04)
+Pipeline deployed at `/root/tardis/` with `.venv/`, `data/`, `logs/`, `.env`.
 
 Verified download speed Tardis -> Hetzner Nuremberg: **~20-30 MB/s per worker** (4 parallel workers share the 1 Gbit/s pipe).
 
@@ -101,11 +104,11 @@ Expected output per day:
 [download] 2025-05-02
   Size: 4.55 GB
   Downloaded: 4.55 GB  in 216s  (21.5 MB/s avg)
-[stream_extract] 2025-05-02  max_dte=28  source: 4.55 GB
+[stream_extract] 2025-05-02  max_dte=700  source: 4.55 GB
   Scan done: 19,469,292 matched / 105,133,575 total  ->  124,358 snapshot rows  (193s)
   Options: /bulk/data/options_2025-05-02.parquet  (1.2 MB, 124,358 rows)
   Spot:    /bulk/data/spot_2025-05-02.parquet  (33 KB, 1,441 1-min bars)
-[clean] 2025-05-02  final_rows=124,358  nan_filled=59,669  mark_clamped_low=227  mark_clamped_high=472
+[clean] 2025-05-02  final_rows=245,000  nan_remaining=85,000  mark_clamped_low=227  mark_clamped_high=472
   Deleted raw: /bulk/data/options_chain_2025-05-02.csv.gz
 [done] 2025-05-02  416s
 ```
@@ -130,20 +133,20 @@ If both look correct, proceed. If anything fails, do not continue to the bulk ru
 
 Edit the block boundaries at the top of `run_bulk.sh` to match your subscription window. Split evenly into 4 blocks, each processed newest-first within the block.
 
-Example for window 2025-04-11 to 2026-04-10 (365 days):
+Example for window 2025-04-11 to 2026-04-16 (371 days):
 
 ```bash
-WORKER_A_FROM="2026-01-10"
-WORKER_A_TO="2026-04-10"
+WORKER_A_FROM="2026-01-15"
+WORKER_A_TO="2026-04-16"
 
-WORKER_B_FROM="2025-10-11"
-WORKER_B_TO="2026-01-09"
+WORKER_B_FROM="2025-10-14"
+WORKER_B_TO="2026-01-14"
 
-WORKER_C_FROM="2025-07-12"
-WORKER_C_TO="2025-10-10"
+WORKER_C_FROM="2025-07-13"
+WORKER_C_TO="2025-10-13"
 
 WORKER_D_FROM="2025-04-11"
-WORKER_D_TO="2025-07-11"
+WORKER_D_TO="2025-07-12"
 ```
 
 Days that already have both output parquets are automatically skipped -- the run is safely resumable.
@@ -206,7 +209,7 @@ Per-day timing scales with raw file size. Deribit listed many more instruments i
 | Oct 2025-Jan 2026 | 5-7 GB | ~10 min |
 | Jan-Apr 2026 | 5-10 GB | 12-20 min |
 
-Wall-clock total for 365 days, 4 parallel workers: **~18-22 hours.**
+Wall-clock total for 371 days, 4 parallel workers: **~24-30 hours** (more rows per day with all DTE included).
 Worker A (most recent data) is always the bottleneck.
 
 Server cost: ~24 hrs x 0.077 EUR/hr = **~2 EUR total**.
@@ -234,7 +237,7 @@ Server cost: ~24 hrs x 0.077 EUR/hr = **~2 EUR total**.
 - Maintains last_quote: dict[(expiry, strike, is_call) -> latest row values], updated on every matching row
 - At each 5-min UTC boundary: flushes last_quote -> appends ~300 snapshot rows
 - Spot OHLC: accumulates underlying_price per 1-min bucket inline
-- Filters to BTC options with expiry <= max_dte calendar days from trade date (default 28)
+- Filters to BTC options (all expiries, no DTE cap — max_dte=700)
 - Writes both parquets at end using zstd compression
 
 ### fixup_midnight.py -- why it exists and when to run it
@@ -258,13 +261,13 @@ Called inline by bulk_fetch.py after extraction, before the raw gz is deleted. E
 **Step 1 -- IV format normalisation**
 If median(mark_iv) on non-zero rows < 2.0, the column is in decimal format. Multiply entire column by 100. Logged as iv_rescaled=True.
 
-**Step 2 -- NaN / zero fill**
+**Step 2 -- NaN handling**
 - Rows where underlying_price is NaN or 0: drop entirely
-- bid_price, ask_price, mark_price, mark_iv, delta: NaN -> 0.0
-Zero in price/greek columns is the backtester's signal for absent data.
+- bid_price, ask_price, mark_price, mark_iv, delta: NaN is **preserved** (not filled)
+- Convention: NaN = "data absent from exchange", 0.0 = "exchange reported zero"
 
 **Step 3 -- Spot price outlier removal**
-Drop rows where underlying_price deviates >20% from the day's median. Guards against corrupt one-off values. In practice this has never fired across 365 days -- Tardis spot data is clean.
+Drop rows where underlying_price deviates >20% from the day's median. Guards against corrupt one-off values. In practice this has never fired across 370+ days -- Tardis spot data is clean.
 
 **Step 4 -- Option price outlier removal**
 Two-tier check (deep ITM options can legitimately be worth several BTC):
@@ -272,7 +275,7 @@ Two-tier check (deep ITM options can legitimately be worth several BTC):
 - Calls: ask > 6.0 BTC -> drop
 - Puts: ask > (strike / spot) x 1.05 -> drop (intrinsic value + 5% time-value slack)
 
-Fired on ~22/365 days, always small counts (typical: 2-20 rows, max 576 rows on a high-volatility day).
+Fired on ~22/371 days, always small counts (typical: 2-20 rows, max 576 rows on a high-volatility day).
 
 **Step 5 -- Bid/ask/mark ordering**
 Applied only where bid > 0 and ask > 0:
@@ -357,9 +360,9 @@ for f in sorted(glob.glob(\"/bulk/data/options_*.parquet\"))[::30]:
 
 ## Backtester Memory Design (365-day scale)
 
-Loading 365 days with Python object boxing (~24 bytes per float) requires ~7 GB RAM and 60-90s load time. Use columnar NumPy arrays instead.
+Loading 371 days with Python object boxing (~24 bytes per float) requires ~14 GB RAM and 90-120s load time. Use columnar NumPy arrays instead.
 
-Target layout (~1.35 GB RAM for 365 days):
+Target layout (~3 GB RAM for 371 days):
 
 ```
 Option data (~40M rows):

@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.1] - 2026-04-19
+
+### Added — Execution Layer Refactoring Plan
+
+- **`docs/upgrades/execution-layer-refactoring.md`** — Comprehensive plan for extracting the execution layer into a typed `execution/` package; reviewed and updated: denomination consistency (all arithmetic in native currency, single USD conversion at end), `Price(amount, currency)` as the universal value type, `currency: Currency` field on `TradeLifecycle`, `realized_pnl` as `Optional[Price]` with separate `realized_pnl_usd`, dropped `FillFees` in favour of `Price`, 5-phase implementation plan with ~35 test cases per phase
+
+### Added — Backtester: Batman Calendar Strategy
+
+- **`backtester/strategies/batman_calendar.py`** (`BatmanCalendar`) — New calendar spread strategy registered in CLI as `batman_calendar`
+
+### Added — Backtester: Short Strangle Offset Strategy
+
+- **`backtester/strategies/short_strangle_offset.py`** (`ShortStrangleOffset`) — Replaces `ShortStraddleStrangle` and `ShortStrangleDelta` with a unified offset-based strangle; registered as `short_straddle`
+
+### Changed — Backtester: Timestamped Report Filenames
+
+- **`backtester/run.py`** — Report output filenames now include a UTC timestamp (`YYYYMMDD_HHMMSS`) to prevent overwriting previous runs
+
+### Removed — Backtester: Superseded Strategies
+
+- **`backtester/strategies/deltaswipswap1m.py`** — Deleted; superseded by `deltaswipswap`
+- **`backtester/strategies/short_straddle_strangle.py`** — Deleted; superseded by `short_strangle_offset`
+- **`backtester/strategies/short_strangle_delta.py`** — Deleted; superseded by `short_strangle_offset`
+
+### Fixed
+
+- **`.env`** — Deribit testnet credential env-var names corrected from `_TESTNET` to `_TEST` suffix to match `config.py` expectations
+
 ## [1.15.0] - 2026-04-17
 
 ### Changed — Project Renamed: CoincallTrader → CryoTrader

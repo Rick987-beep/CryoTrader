@@ -90,6 +90,7 @@ backtester2/*_report.html
 
 # Backtester artifacts (data, raw ingest, tardis downloads, reports)
 backtester/data/
+backtester/data_dte700/
 backtester/ingest/raw/
 backtester/ingest/tardis/data/
 backtester/ingest/tickrecorder/data/

@@ -26,10 +26,10 @@ account = "deribit-big"
 [params]
 qty              = 5      # contracts per leg
 dte              = 1      # target expiry: 1, 2, or 3 calendar days ahead
-delta            = 0.15   # target absolute delta per leg (e.g. 0.25 → 25Δ call + 25Δ put)
+delta            = 0.125  # target absolute delta per leg (e.g. 0.25 → 25Δ call + 25Δ put)
 entry_hour       = 18     # UTC hour for entry window (4-hour: ENTRY_HOUR to ENTRY_HOUR+4)
 stop_loss_pct    = 5.0    # SL fires when combined fair ≥ premium × (1 + stop_loss_pct)
-take_profit_pct  = 0.80   # TP: close when profit ratio ≥ this (0 = disabled)
+take_profit_pct  = 0.0    # TP: close when profit ratio ≥ this (0 = disabled)
 max_hold_hours   = 0      # max hold in hours; 0 = disabled (hold to 08:00 UTC expiry)
 min_otm_pct      = 0      # min OTM distance %; 0 = disabled
 weekend_filter   = 1      # 1 = block new opens on Sat/Sun

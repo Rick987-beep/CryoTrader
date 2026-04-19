@@ -17,7 +17,7 @@ analysis/
 │   └── archive/                 #   Old versions & superseded scripts
 ├── capture_snapshot.py          # Captures BTC option chain snapshots from Coincall
 ├── data/                        # Snapshot JSON files
-├── tardis_options/              # Deribit tardis.dev data & HistoricOptionChain module
+├── backtester/ingest/tardis/   # Deribit tardis.dev data & HistoricOptionChain module (in backtester/)
 ├── PutSelling/                  # Put-selling strategy analysis
 └── README.md
 ```
@@ -59,7 +59,7 @@ backtest.py  →  data.py (fetch candles)
 
 `backtester/backtest_deribit_realdata.py` is a standalone ground-truth backtest using
 actual Deribit bid/ask data from tardis.dev (no BS model). It depends on
-`analysis.tardis_options.HistoricOptionChain` and a parquet data file.
+`backtester.ingest.tardis.HistoricOptionChain` and a parquet data file.
 
 This module has its own reporting layer. A future refactor could share the
 reporting module with the main backtester.

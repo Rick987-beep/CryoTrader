@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-short_straddle_strangle.py — Short 1DTE straddle/strangle, SL + time/expiry exit.
+short_strangle_offset.py — Short 1DTE straddle/strangle, SL + time/expiry exit.
 
 Sells an ATM straddle (offset=0) or OTM strangle (offset>0) on the next-day
 Deribit expiry, collects the combined call+put premium, and exits when the
@@ -104,10 +104,10 @@ def _select_expiry(state):
 # Strategy
 # ------------------------------------------------------------------
 
-class ShortStraddleStrangle:
+class ShortStrangleOffset:
     """Sell 1DTE ATM straddle or OTM strangle; exit on SL, time exit, or expiry."""
 
-    name = "short_straddle_strangle"
+    name = "short_strangle_offset"
     DATE_RANGE = ("2026-03-09", "2026-03-23")
     DESCRIPTION = (
         "Sells a straddle or strangle on the next calendar day's Deribit expiry. "

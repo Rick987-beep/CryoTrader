@@ -118,7 +118,7 @@ class ShortStrangleDeltaTp:
     """Sell N-DTE OTM strangle (delta-selected); exit on TP, SL, time exit, or expiry."""
 
     name = "short_strangle_delta_tp"
-    DATE_RANGE = ("2025-12-11", "2026-04-10")
+    DATE_RANGE = ("2025-11-10", "2026-04-15")
     DESCRIPTION = (
         "Sells a strangle on a Deribit expiry N calendar days ahead (dte=1/2/3), "
         "with legs chosen by target delta (e.g. delta=0.25 → 25-delta call + put). "
@@ -132,12 +132,12 @@ class ShortStrangleDeltaTp:
     PARAM_GRID = {
         # Discovery grid: broad, sparse — find candidate regions.
         # Sensitivity analysis and WFO use experiment files in backtester/experiments/.
-        # 1 × 6 × 5 × 5 × 4 = 600 combos.
+        
         "dte":              [1],
-        "delta":            [0.05, 0.075, 0.10, 0.125, 0.15, 0.20, 0.25, 0.30],
-        "entry_hour":       [12, 14, 16, 18, 20, 22],
-        "stop_loss_pct":    [3.0, 4.0, 5.0, 6.0, 7.0],
-        "take_profit_pct":  [0.50, 0.6, 0.8, 0.80, 0.90],
+        "delta":            [0.10, 0.125, 0.15],
+        "entry_hour":       [14, 16, 18, 20, 22],
+        "stop_loss_pct":    [0, 3.0, 4.0, 5.0, 6.0],
+        "take_profit_pct":  [0, 0.5, 0.90],
         "max_hold_hours":   [0],
         "skip_weekends":    [1],
         "min_otm_pct":      [0],
@@ -269,9 +269,11 @@ class ShortStrangleDeltaTp:
         put_q  = state.get_option(expiry, pos.metadata["put_strike"], False)
         if call_q is None or put_q is None:
             return None
-        if call_q.ask <= 0 or put_q.ask <= 0:
-            return None  # missing ask — skip tick
-        current_usd = call_q.ask_usd + put_q.ask_usd
+        # ask == 0 means the option is essentially worthless (no market maker quoting).
+        # Treat as 0 rather than skipping — a zero ask is a genuine TP signal.
+        call_ask_usd = call_q.ask_usd if call_q.ask > 0 else 0.0
+        put_ask_usd  = put_q.ask_usd  if put_q.ask  > 0 else 0.0
+        current_usd = call_ask_usd + put_ask_usd
         _ep = pos.entry_price_usd
         profit_ratio = (_ep - current_usd) / (_ep if _ep > 0.01 else 0.01)
         if profit_ratio >= self._tp_pct:
@@ -359,13 +361,16 @@ class ShortStrangleDeltaTp:
             call_exit_usd = max(0.0, state.spot - call_strike)
             put_exit_usd  = max(0.0, put_strike  - state.spot)
         else:
-            # Buy back at ask; fall back to entry price on missing data.
+            # Buy back at ask; fall back to Deribit min-tick (0.0001 BTC) on
+            # missing/zero ask — options quoted at 0 are essentially worthless
+            # but are never free to close on Deribit.
+            _min_tick_usd = 0.0001 * state.spot
             call_q = state.get_option(expiry, call_strike, True)
             put_q  = state.get_option(expiry, put_strike,  False)
             call_exit_usd = (call_q.ask_usd if call_q and call_q.ask > 0
-                             else pos.legs[0]["entry_price_usd"])
+                             else _min_tick_usd)
             put_exit_usd  = (put_q.ask_usd if put_q and put_q.ask > 0
-                             else pos.legs[1]["entry_price_usd"])
+                             else _min_tick_usd)
 
         exit_usd   = call_exit_usd + put_exit_usd
         fees_close = 0.0 if reason == "expiry" else (

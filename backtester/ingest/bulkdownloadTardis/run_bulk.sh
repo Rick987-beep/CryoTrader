@@ -33,22 +33,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="${SCRIPT_DIR}/data"
 LOGS_DIR="${SCRIPT_DIR}/logs"
 VENV="${SCRIPT_DIR}/.venv/bin/activate"
-MAX_DTE=28
+MAX_DTE=700
 
 # Worker blocks — newest-first within each block.
-# Total: 365 days (2025-04-11 → 2026-04-10), split 4×~91 days.
-# Apr 11–12 2025 already done (smoke test) — workers skip them automatically.
-WORKER_A_FROM="2026-01-10"
-WORKER_A_TO="2026-04-10"
+# Total: 371 days (2025-04-11 → 2026-04-16), split 4×~93 days.
+# All DTE included (MAX_DTE=700). Academic key covers 2025-04-11 to 2026-07-12.
+WORKER_A_FROM="2026-01-15"
+WORKER_A_TO="2026-04-16"
 
-WORKER_B_FROM="2025-10-11"
-WORKER_B_TO="2026-01-09"
+WORKER_B_FROM="2025-10-14"
+WORKER_B_TO="2026-01-14"
 
-WORKER_C_FROM="2025-07-12"
-WORKER_C_TO="2025-10-10"
+WORKER_C_FROM="2025-07-13"
+WORKER_C_TO="2025-10-13"
 
 WORKER_D_FROM="2025-04-11"
-WORKER_D_TO="2025-07-11"
+WORKER_D_TO="2025-07-12"
 
 # ── Preflight checks ──────────────────────────────────────────────────────────
 

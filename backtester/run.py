@@ -26,14 +26,13 @@ from backtester.walk_forward import run_walk_forward
 from backtester.experiment import load_experiment
 from backtester.strategies.straddle_strangle import ExtrusionStraddleStrangle
 from backtester.strategies.daily_put_sell import DailyPutSell
-from backtester.strategies.short_straddle_strangle import ShortStraddleStrangle
-from backtester.strategies.short_strangle_delta import ShortStrangleDelta
+from backtester.strategies.short_strangle_offset import ShortStrangleOffset
 from backtester.strategies.short_strangle_delta_tp import ShortStrangleDeltaTp
 from backtester.strategies.deltaswipswap import DeltaSwipSwap
-from backtester.strategies.deltaswipswap1m import DeltaSwipSwap1m
 from backtester.strategies.short_strangle_weekly_tp import ShortStrangleWeeklyTp
 from backtester.strategies.short_strangle_weekly_cap import ShortStrangleWeeklyCap
 from backtester.strategies.short_strangle_weekend import ShortStrangleWeekend
+from backtester.strategies.batman_calendar import BatmanCalendar
 from backtester.config import cfg as _cfg
 
 # ── Strategy Registry ────────────────────────────────────────────
@@ -41,14 +40,13 @@ from backtester.config import cfg as _cfg
 STRATEGIES = {
     "straddle": ExtrusionStraddleStrangle,
     "put_sell": DailyPutSell,
-    "short_straddle": ShortStraddleStrangle,
-    "delta_strangle": ShortStrangleDelta,
+    "short_straddle": ShortStrangleOffset,
     "delta_strangle_tp": ShortStrangleDeltaTp,
     "deltaswipswap": DeltaSwipSwap,
-    "deltaswipswap1m": DeltaSwipSwap1m,
     "weekly_strangle_tp": ShortStrangleWeeklyTp,
     "weekly_strangle_cap": ShortStrangleWeeklyCap,
     "weekend_strangle": ShortStrangleWeekend,
+    "batman_calendar": BatmanCalendar,
 }
 
 DEFAULT_OPTIONS = _cfg.data.options_parquet
@@ -171,7 +169,8 @@ def main():
     report_stem = args.experiment or args.strategy
     if args.mode != "discovery":
         report_stem = f"{report_stem}_{args.mode}"
-    output_path = args.output or os.path.join(reports_dir, f"{report_stem}_report.html")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    output_path = args.output or os.path.join(reports_dir, f"{report_stem}_{ts}.html")
     with open(output_path, "w") as f:
         f.write(html)
 

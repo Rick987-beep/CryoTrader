@@ -5,10 +5,10 @@ import numpy as np
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from analysis.tardis_options import HistoricOptionChain
+from backtester.ingest.tardis import HistoricOptionChain
 
 PARQUET = os.path.join(os.path.dirname(__file__),
-    "tardis_options", "data", "btc_0dte_1dte_2025-03-01.parquet")
+    "backtester", "ingest", "tardis", "data", "btc_0dte_1dte_2025-03-01.parquet")
 EXPIRY = "2MAR25"
 OFFSETS = [0, 500, 1000, 1500, 2000, 2500, 3000]
 

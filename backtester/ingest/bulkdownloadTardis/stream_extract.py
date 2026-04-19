@@ -44,7 +44,7 @@ except ImportError:
 INTERVAL_MIN = 5
 INTERVAL_US = INTERVAL_MIN * 60 * 1_000_000     # 5-min in microseconds
 SPOT_INTERVAL_US = 60 * 1_000_000                # 1-min in microseconds
-MAX_DTE_DEFAULT = 28
+MAX_DTE_DEFAULT = 700
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 

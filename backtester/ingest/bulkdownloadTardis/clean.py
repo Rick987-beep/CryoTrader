@@ -61,7 +61,7 @@ class CleanReport:
     iv_rescaled: bool = False           # True if entire mark_iv column was × 100
 
     # Step 2
-    nan_filled: int = 0                 # cells set to 0.0
+    nan_remaining: int = 0              # NaN cells left as-is (data absent from exchange)
     zero_spot_dropped: int = 0          # rows dropped for missing underlying_price
 
     # Step 3
@@ -84,8 +84,8 @@ class CleanReport:
         parts = [f"[clean] {self.date_str}  final_rows={self.final_rows:,}"]
         if self.iv_rescaled:
             parts.append("iv_rescaled=True")
-        if self.nan_filled:
-            parts.append(f"nan_filled={self.nan_filled:,}")
+        if self.nan_remaining:
+            parts.append(f"nan_remaining={self.nan_remaining:,}")
         if self.zero_spot_dropped:
             parts.append(f"zero_spot_dropped={self.zero_spot_dropped:,}")
         if self.spot_outlier_dropped:
@@ -139,12 +139,11 @@ def clean_day(opts_df, spot_df, date_str="unknown"):
     if report.zero_spot_dropped:
         opts = opts[~bad_spot].reset_index(drop=True)
 
-    # Fill remaining NaN fields with 0.0 — this is the signal to the backtester
-    # that data was absent, not an error.
-    fill_cols = ["bid_price", "ask_price", "mark_price", "mark_iv", "delta"]
-    before_fill = opts[fill_cols].isna().sum().sum()
-    opts[fill_cols] = opts[fill_cols].fillna(0.0)
-    report.nan_filled = int(before_fill)
+    # Count remaining NaN cells. NaN is preserved in the parquet as the
+    # sentinel for "data absent from exchange" — distinct from 0.0 which means
+    # "exchange reported this value as zero".
+    nan_cols = ["bid_price", "ask_price", "mark_price", "mark_iv", "delta"]
+    report.nan_remaining = int(opts[nan_cols].isna().sum().sum())
 
     # ── Step 3: Spot price outlier removal ───────────────────────────────────
     # Drop rows where underlying_price deviates more than SPOT_OUTLIER_PCT from

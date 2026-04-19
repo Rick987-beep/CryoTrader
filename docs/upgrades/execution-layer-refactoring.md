@@ -113,7 +113,7 @@ execution/
 ├── router.py             # ExecutionRouter: routes open/close to limit/rfq/hybrid
 ├── profiles.py           # ExecutionProfile, PhaseConfig — loaded from TOML + code
 ├── currency.py           # Price, Currency, denomination conversion
-└── fees.py               # FillFees: captures per-fill fee data from exchange responses
+└── fees.py               # Fee extraction helpers: parse fee data from exchange responses
 
 order_manager.py          # Stays — already well-factored
 trade_lifecycle.py        # Stays — trimmed of I/O methods
@@ -140,7 +140,7 @@ ExecutionRouter
 FillManager
   │  asks PricingEngine.compute(symbol, side, mode, orderbook) for each leg
   │  places/requotes via OrderManager
-  │  captures per-fill fees from exchange response (FillFees)
+  │  captures per-fill fees from exchange response (as Price objects)
   │  returns FillResult (includes fees per leg)
   ▼
 LifecycleEngine
@@ -314,7 +314,7 @@ class LegFillSnapshot:
     order_id: Optional[str]
     skipped: bool             # True if this leg was skipped (best_effort)
     skip_reason: Optional[str]
-    fee: Optional[Price]      # exchange-reported fee for this leg (None if not yet known)
+    fee: Optional[Price]      # exchange-reported fee for this leg, native denomination (None if not yet known)
 
 @dataclass
 class FillResult:
@@ -326,7 +326,11 @@ class FillResult:
     phase_pricing: str               # current phase's pricing mode
     elapsed_seconds: float
     error: Optional[str] = None
-    total_fees: Optional[Price] = None  # sum of all leg fees (None if incomplete)
+    total_fees: Optional[Price] = None  # sum of all leg fees in native denomination (None if incomplete)
+
+    # INVARIANT: all legs in a single FillResult are always on the same exchange,
+    # so all fill prices and fees share a single denomination (BTC for Deribit,
+    # USD for Coincall). Cross-exchange trades are not supported.
 
     @property
     def all_filled(self) -> bool:
@@ -347,7 +351,7 @@ class FillResult:
             snap = by_symbol.get(leg.symbol)
             if snap:
                 leg.filled_qty = snap.filled_qty
-                leg.fill_price = float(snap.fill_price) if snap.fill_price else leg.fill_price
+                leg.fill_price = snap.fill_price  # Price object — preserves denomination
                 leg.order_id = snap.order_id
 ```
 
@@ -416,22 +420,21 @@ Current `ExecutionRouter` both routes and constructs `LimitFillManager` instance
 - Fill manager construction uses `FillManager(order_manager, pricing_engine, phases)`.
 - Mark-price logging moves to an event hook on `FillResult` instead of being embedded in the router.
 
-### 4.7 `execution/fees.py` — FillFees
+### 4.7 `execution/fees.py` — Fee Helpers
 
-**Purpose:** Capture and normalize per-fill fee data from exchange responses.
+**Purpose:** Helper functions for extracting and normalizing fee data from exchange responses. No separate `FillFees` type — fees use `Price` directly.
 
 ```python
-@dataclass
-class FillFees:
-    """Fee data for a single fill, as reported by the exchange."""
-    amount: float
-    currency: Currency       # BTC for Deribit, USD for Coincall
-    amount_usd: Optional[float] = None  # converted at fill time if index_price available
-
-    def to_usd(self, index_price: float) -> float:
-        if self.currency == Currency.USD:
-            return self.amount
-        return self.amount * index_price
+# NOTE: Fees use the same `Price` type as fill prices and order prices.
+# There is no separate FillFees type — `Price(amount, currency)` already
+# carries the denomination.  This avoids having two overlapping types
+# (FillFees vs Price) for the same concept.
+#
+# Where the exchange returns fee data, it is captured as:
+#   fee = Price(amount=0.00032, currency=Currency.BTC)  # Deribit
+#   fee = Price(amount=1.25,    currency=Currency.USD)  # Coincall
+#
+# Conversion to USD for display/reporting uses Price.to_usd(index_price).
 ```
 
 **Where fees come from:**
@@ -442,16 +445,16 @@ class FillFees:
 | Coincall | `get_order_status()` → `data.fee` field, or trade history endpoint | Per-order, in USD |
 
 **Integration points:**
-- `OrderRecord` gains `fee: Optional[FillFees]` — populated when `poll_order()` sees a fill with fee data.
-- `LegFillSnapshot` (in `FillResult`) exposes the fee for each leg.
-- `TradeLifecycle` gains `total_fees_usd: Optional[float]` — accumulated from `FillResult.total_fees`.
-- `realized_pnl` computation in `_finalize_close()` deducts `total_fees_usd`.
+- `OrderRecord` gains `fee: Optional[Price]` — populated when `poll_order()` sees a fill with fee data, in native denomination.
+- `LegFillSnapshot` (in `FillResult`) exposes the fee for each leg as `Optional[Price]`.
+- `TradeLifecycle` gains fee tracking fields in both native denomination and USD (see §5.1).
+- `realized_pnl` computation in `_finalize_close()` deducts fees in native denomination, then converts the net result to USD (see §11.3).
 
 **Design note:** This is "best effort at fill time" fee capture — not the post-close reconciliation described in `exchange-trade-log-integration.md`. That reconciliation (querying the exchange trade log for confirmed fills + fees) is a complementary, later step. The execution layer captures what it can from the order status response; the reconciler fixes up any discrepancy.
 
 ### 4.8 Files that stay largely unchanged
 
-- **`order_manager.py`** — Already well-factored. Changes: accept `Price` objects where it currently takes `float price`, add denomination assertion before calling executor. Add `fee: Optional[FillFees]` to `OrderRecord`.
+- **`order_manager.py`** — Already well-factored. Changes: accept `Price` objects where it currently takes `float price`, add denomination assertion before calling executor. Add `fee: Optional[Price]` to `OrderRecord` (uses `Price` — no separate fee type).
 - **`rfq.py`** — Stays as-is for Coincall. The `ExchangeRFQExecutor` ABC already exists in `exchanges/base.py`. For Deribit block trades, a `DeribitRFQAdapter` would be added when needed. The hybrid routing in `execution/router.py` calls RFQ through the existing interface — no changes to `rfq.py` internals.
 - **`trade_lifecycle.py`** — Keep as data-only module. Move `executable_pnl()` and `compute_fair_price()` out (they do I/O). Add typed fields for fill context and fees instead of `metadata` stashing.
 - **`lifecycle_engine.py`** — Simplify fill sync code. Replace string-based status checks with `FillResult` pattern matching.
@@ -469,6 +472,12 @@ Replace the `metadata` grab-bag for execution state with first-class fields:
 class TradeLifecycle:
     # ... existing fields ...
 
+    # NEW: trade-level denomination — the source of truth for this trade cycle.
+    # Set at creation from the exchange adapter. All prices, fills, fees, and PnL
+    # on this trade are in this denomination. USD values are derived for display only.
+    # Persisted in to_dict() so from_dict() can reconstruct Price objects.
+    currency: Currency = Currency.BTC       # BTC (Deribit), USD (Coincall), ETH (future)
+
     # NEW: typed execution context (replaces metadata stashing)
     open_fill_context: Optional["FillManager"] = field(default=None, repr=False)
     close_fill_context: Optional["FillManager"] = field(default=None, repr=False)
@@ -479,10 +488,19 @@ class TradeLifecycle:
     open_pricing_snapshot: Optional[Dict[str, PricingResult]] = None   # symbol → snapshot
     close_pricing_snapshot: Optional[Dict[str, PricingResult]] = None
 
-    # NEW: fee tracking
-    total_fees_usd: Optional[float] = None    # accumulated from FillResult at open + close
-    open_fees_usd: Optional[float] = None     # fees from opening fills
-    close_fees_usd: Optional[float] = None    # fees from closing fills
+    # NEW: fee tracking — stored in BOTH native denomination and USD.
+    # Native is authoritative (matches exchange records); USD is for display/logging.
+    open_fees: Optional[Price] = None         # fees from opening fills (native denomination)
+    close_fees: Optional[Price] = None        # fees from closing fills (native denomination)
+    total_fees: Optional[Price] = None        # open + close fees (native denomination)
+    open_fees_usd: Optional[float] = None     # open fees converted to USD at fill time
+    close_fees_usd: Optional[float] = None    # close fees converted to USD at fill time
+    total_fees_usd: Optional[float] = None    # total fees in USD (for display/Telegram/logs)
+
+    # NEW: PnL — replaces old `realized_pnl: float` (which was denomination-ambiguous).
+    # Native is authoritative; USD is for display/Telegram/logs.
+    realized_pnl: Optional[Price] = None      # net PnL in native denomination (was: bare float)
+    realized_pnl_usd: Optional[float] = None  # net PnL converted to USD at close time
 
     # KEEP: metadata dict for strategy-specific data (SL thresholds, etc.)
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -503,7 +521,9 @@ class TradeLeg:
     position_id: Optional[str] = None
 ```
 
-**Note:** During the transition, `fill_price` could carry a wrapper that supports both `float(leg.fill_price)` and `leg.fill_price.currency`. Or we keep `fill_price: float` and add `fill_price_currency: Optional[Currency]` to avoid breaking every consumer. This is a key design decision for Phase 2 (see §10).
+**Decision:** `fill_price` is `Optional[Price]` — the typed approach. All consumers that need a raw float call `fill_price.amount` (or `float(fill_price)` via `__float__`). This is a one-time migration cost in Phase 3 that permanently eliminates the denomination ambiguity. The `Price.__float__()` method provides backward-compatible raw access where denomination has already been verified.
+
+**Denomination invariant:** All `fill_price` values on legs within a single `TradeLifecycle` share the same `Currency` (a trade does not span exchanges). PnL, fees, and entry/exit cost are all computed in this native denomination first, then converted to USD for display.
 
 ---
 
@@ -651,7 +671,7 @@ Each `open_phase_N` / `close_phase_N` block supports:
 | `buffer_pct` | float | `2.0` | For `aggressive` mode: percent above/below fair to place the order |
 | `fair_aggression` | float | `0.0` | For `fair` mode: 0.0 = pure fair, 1.0 = full aggression toward top-of-book |
 | `min_price_pct_of_fair` | float | `None` | Floor: don't sell below this fraction of fair value (e.g. `0.83` = skip if price < 83% of fair) |
-| `min_floor_price` | float | `None` | Absolute price floor (e.g. `0.0001` BTC for deep-OTM close phases) |
+| `min_floor_price` | float | `None` | Absolute price floor in **exchange-native denomination** (e.g. `0.0001` BTC on Deribit, `0.01` USD on Coincall) |
 | `reprice_skip_tolerance` | float | `0.001` | Don't requote if new price is within this relative distance of current price (avoids churn) |
 
 ### 7.4 System Guardrails (not configurable — hardcoded safety nets)
@@ -675,6 +695,11 @@ New file: `execution_profiles.toml` — a catalogue of reusable standard profile
 # Standard execution profile library.
 # Strategies can use these by name, define their own inline, or mix both.
 # Phases are numbered: open_phase_1, open_phase_2, ... (executed in order).
+#
+# DENOMINATION CONVENTION: All price values (min_floor_price, buffer amounts)
+# are in the exchange's native denomination: BTC for Deribit options, USD for
+# Coincall options. Profiles are exchange-aware — a Deribit strategy must not
+# use a Coincall-denominated floor price.
 
 # ── Passive 3-phase open (put_sell_80dte default) ──────────────────────
 [profiles.passive_open_3phase]
@@ -953,26 +978,37 @@ This refactoring implements layer 1. Layer 2 is a separate, complementary upgrad
 ```
 FillManager._poll_fills()
   │  calls order_manager.poll_order(order_id)
-  │  OrderManager reads fee from exchange response → stores on OrderRecord.fee
+  │  OrderManager reads fee from exchange response → OrderRecord.fee = Price(amount, currency)
   ▼
 FillManager.check() returns FillResult
-  │  FillResult.legs[i].fee = OrderRecord.fee (propagated)
-  │  FillResult.total_fees = sum of leg fees
+  │  FillResult.legs[i].fee = OrderRecord.fee (propagated, native denomination)
+  │  FillResult.total_fees = sum of leg fees (same denomination — single exchange invariant)
   ▼
 LifecycleEngine._check_open_fills()
   │  result.sync_to_trade_legs() → writes fills + fees to TradeLeg
-  │  trade.open_fees_usd = result.total_fees.to_usd(index_price)
+  │  trade.open_fees = result.total_fees                          # native (e.g. Price(0.00032, BTC))
+  │  trade.open_fees_usd = result.total_fees.to_usd(index_price)  # converted for display
   ▼
-(same for close fills → trade.close_fees_usd)
+(same for close fills → trade.close_fees, trade.close_fees_usd)
   ▼
-trade._finalize_close()
+trade._finalize_close(index_price)
+  │  # PnL computed in NATIVE denomination first (entry/exit costs are native):
+  │  native_pnl = -(entry_cost + exit_cost)              # e.g. 0.0042 BTC
+  │  native_fees = total_fees.amount                      # e.g. 0.00064 BTC
+  │  net_native_pnl = native_pnl - native_fees            # e.g. 0.00356 BTC
+  │  #
+  │  # Then convert the NET result to USD for display/logging:
+  │  trade.realized_pnl = Price(net_native_pnl, trade.currency)  # authoritative, native
+  │  trade.realized_pnl_usd = net_native_pnl * index_price       # for Telegram/logs
+  │  trade.total_fees = open_fees + close_fees            # native
   │  trade.total_fees_usd = open_fees_usd + close_fees_usd
-  │  trade.realized_pnl = -(entry_cost + exit_cost) - total_fees_usd
 ```
+
+**Key denomination rule:** PnL arithmetic (entry cost − exit cost − fees) is always performed in the exchange's native denomination. This avoids mixing BTC PnL with USD fees. Conversion to USD happens once, at the end, on the net result.
 
 ### 11.4 Reporting
 
-- **Telegram notifications:** Include fee in PnL breakdown: `"PnL: +$142.50 (fees: -$8.34, net: +$134.16)"`
+- **Telegram notifications:** Include fee in PnL breakdown: `"PnL: +$142.50 (fees: -0.00012 BTC / -$8.34, net: +$134.16)"` — shows both native and USD fee
 - **`ct.strategy` log:** `TRADE_CLOSED` event includes `fees_usd` field.
 - **`ct.execution` log:** `ORDER_FILLED` event includes `fee` and `fee_currency` fields.
 - **Dashboard:** Display fee-adjusted PnL.
@@ -1115,21 +1151,21 @@ Not in scope for the initial refactoring, but the infrastructure makes it nearly
 | 1.3 | Extract `execution/fill_result.py`: `FillStatus`, `LegFillSnapshot`, `FillResult` |
 | 1.4 | Extract `execution/pricing.py`: `PricingEngine` — port all 6 pricing modes from `_get_phased_price` and `_get_aggressive_price`. Unit test each mode independently. |
 | 1.5 | Extract `execution/profiles.py`: `PhaseConfig`, `ExecutionProfile`, TOML loader, RFQ hybrid fields |
-| 1.6 | Extract `execution/fees.py`: `FillFees`, `FeeSummary` — pure data classes, no I/O |
+| 1.6 | Extract `execution/fees.py`: fee extraction helpers — parse exchange responses into `Price` fee objects, no I/O |
 | 1.7 | Create `execution_profiles.toml` with profiles matching current strategy configs for 3 target strategies |
 | 1.8 | Wire `PricingEngine` into existing `LimitFillManager` — delegate price computation instead of inline. Behavioral equivalence. |
 | 1.9 | Write comprehensive tests: `test_pricing_engine.py`, `test_currency.py`, `test_fees.py`, `test_execution_profiles.py` |
 | 1.10 | Add `test_multileg_execution.py` scaffolding (3-leg butterfly, 4-leg iron condor data structures) |
 
-**Deliverable:** `execution/` package exists. `PricingEngine`, currency, fees, profiles are tested. Old code delegates to new code. All 244+ existing tests pass. No production behavior change.
+**Deliverable:** `execution/` package exists. `PricingEngine`, currency, fees, profiles are tested. Old code delegates to new code. All ~330+ existing tests pass. No production behavior change.
 
 **Testing after Phase 1:**
 
-Run `python -m pytest tests/ -v`. All 244+ existing tests must still pass (extraction must not break anything). Additionally, the new test files must pass:
+Run `python -m pytest tests/ -v`. All ~330+ existing tests must still pass (extraction must not break anything). Additionally, the new test files must pass:
 
 - `test_pricing_engine.py`: For each of the 6 pricing modes (`fair`, `aggressive`, `top_of_book`, `mid`, `best_bid`, `best_ask`), construct an `OrderbookSnapshot` with known values and assert the returned `Price` for both `side="sell"` and `side="buy"`. Cover edge cases: empty bid side (only ask available), empty ask side, zero mark price, negative spread. Verify that `PricingEngine.fair_value(ob)` returns a sane mid-based value. ~50 cases.
 - `test_currency.py`: Construct `Price(0.05, Currency.BTC)` and `Price(3200.0, Currency.USD)`. Test arithmetic (`Price + Price` same currency works, mixed currencies raise). Test `to_usd(index_price)` conversion. Test frozen immutability (assigning to `.amount` raises). ~15 cases.
-- `test_fees.py`: Construct `FillFees(amount=0.0003, currency="BTC")`. Test `to_usd(index_price)`. Test `None` propagation (no fee data → `FillFees.empty()`). ~10 cases.
+- `test_fees.py`: Construct `Price(amount=0.0003, currency=Currency.BTC)` as a fee. Test `to_usd(index_price)` conversion. Test `None` propagation (no fee data → fee stays `None`). Test fee summation: two `Price` fees with same currency sum correctly. ~10 cases.
 - `test_execution_profiles.py`: Load the `execution_profiles.toml` file created in step 1.7. Verify `passive_open_3phase` has 3 open phases in order. Verify `aggressive_2phase` has `open_atomic=True`. Test that loading a non-existent profile raises `ValueError`. Test override merging: override `open_phase_1.duration_seconds` and verify only that field changes. ~15 cases.
 
 **Live test (Deribit testnet):** `tests/live/test_pricing_live.py` — Fetch a real BTC option orderbook from Deribit testnet using the existing `DeribitMarketData` adapter. Pass it to `PricingEngine.compute()` for all 6 modes. Assert every returned price is a `Price` object with `currency == Currency.BTC` and `amount > 0`. This validates that real orderbook shapes parse correctly. Mark `@pytest.mark.live`. Use `_skip_if_no_creds()` pattern from `test_deribit_integration.py`. Pick a liquid near-ATM option with >30 DTE so the orderbook is likely populated.
@@ -1143,13 +1179,15 @@ Run `python -m pytest tests/ -v`. All 244+ existing tests must still pass (extra
 | 2.1 | Create `execution/fill_manager.py`: new `FillManager` class that uses `PricingEngine` and returns `FillResult`. N-leg aware (variable number of legs). |
 | 2.2 | Remove legacy mode from fill manager (convert any strategy using flat `ExecutionParams` to a 1-phase profile) |
 | 2.3 | Create `execution/router.py`: migrate from `execution_router.py`, add RFQ hybrid routing (try RFQ first → limit fallback on timeout/rejection) |
-| 2.4 | Update `order_manager.py`: capture fee from exchange order response into `OrderRecord.fee` / `OrderRecord.fee_currency` |
-| 2.5 | Wire fee data through `FillResult`: `LegFillSnapshot.fee` → `FillResult.total_fees()` → `FeeSummary` |
+| 2.4 | Update `order_manager.py`: capture fee from exchange order response into `OrderRecord.fee: Optional[Price]` (native denomination) |
+| 2.5 | Wire fee data through `FillResult`: `LegFillSnapshot.fee` → `FillResult.total_fees` (as `Price` in native denomination) |
 | 2.6 | Update `lifecycle_engine.py`: replace `_check_open_fills` / `_check_close_fills` manual sync with `result.sync_to_trade_legs()`. Replace string comparisons with `FillStatus` enum checks. Emit structured events to `ct.execution` logger. |
-| 2.7 | Add `open_fees`, `close_fees`, `total_fee_usd` fields to `TradeLifecycle`. Remove `metadata["_open_fill_mgr"]` / `metadata["_close_fill_mgr"]` stashing |
-| 2.8 | Update strategy callbacks to receive `FillResult` |
-| 2.9 | Delete old `LimitFillManager`, `ExecutionParams`, `ExecutionPhase` from `trade_execution.py` |
-| 2.10 | Write `test_fill_manager.py`, `test_execution_router.py` (including hybrid fallback tests) |
+| 2.7 | Add `currency: Currency` field to `TradeLifecycle` (set at creation from exchange adapter). Add `open_fees`, `close_fees`, `total_fees` (as `Price`, native denomination) + `*_usd` variants. Add `realized_pnl: Optional[Price]` + `realized_pnl_usd: Optional[float]` (replaces old bare `realized_pnl: float`). Remove `metadata["_open_fill_mgr"]` / `metadata["_close_fill_mgr"]` stashing |
+| 2.8 | Update `TradeLifecycle.to_dict()` / `from_dict()`: serialize `currency` field, serialize `Price` objects (as `{amount, currency}` dicts), reconstruct on load. Ensure crash recovery preserves denomination info |
+| 2.9 | Preserve grace tick behavior from current `LimitFillManager` in new `FillManager`: on first phase exhaustion, return `PENDING` for one extra tick, then do a final poll before `FAILED` |
+| 2.10 | Update strategy callbacks to receive `FillResult` |
+| 2.11 | Delete old `LimitFillManager`, `ExecutionParams`, `ExecutionPhase` from `trade_execution.py` |
+| 2.12 | Write `test_fill_manager.py`, `test_execution_router.py` (including hybrid fallback tests) |
 
 **Deliverable:** Fill lifecycle uses typed results. Fee data captured. RFQ hybrid routing available. `trade_execution.py` shrinks to just `TradeExecutor` (~120 lines). All tests updated and passing.
 
@@ -1157,7 +1195,7 @@ Run `python -m pytest tests/ -v`. All 244+ existing tests must still pass (extra
 
 Run `python -m pytest tests/ -v`. All existing tests updated to the new types must pass. New test files:
 
-- `test_fill_manager.py`: Mock `OrderManager` and `PricingEngine`. Test a 2-leg strangle open: instantiate `FillManager` with a 2-phase profile, call `tick()` repeatedly, verify it transitions from phase 1 → phase 2 after `duration_seconds`. Verify it calls `pricing_engine.compute()` with the correct mode per phase. Verify `FillResult.status` goes `PENDING → OPEN → FILLED` as mocked fills arrive. Test `best_effort` close: one leg fills, the other stays unfilled after all phases → result is `PARTIAL`. Test `cancel_all()` cleans up open orders. Test N-leg: 4-leg iron condor with 3 fills and 1 unfilled → verify `FillResult.legs` has correct per-leg status. ~30 cases.
+- `test_fill_manager.py`: Mock `OrderManager` and `PricingEngine`. Test a 2-leg strangle open: instantiate `FillManager` with a 2-phase profile, call `tick()` repeatedly, verify it transitions from phase 1 → phase 2 after `duration_seconds`. Verify it calls `pricing_engine.compute()` with the correct mode per phase. Verify `FillResult.status` goes `PENDING → OPEN → FILLED` as mocked fills arrive. Test `best_effort` close: one leg fills, the other stays unfilled after all phases → result is `PARTIAL`. Test `cancel_all()` cleans up open orders. Test N-leg: 4-leg iron condor with 3 fills and 1 unfilled → verify `FillResult.legs` has correct per-leg status. Test grace tick: after all phases exhaust, first `.check()` returns `PENDING` (grace), second `.check()` does a final poll and returns `FILLED` if a late fill arrived, or `FAILED` otherwise. Test that `FillResult.legs[].fee` is `Price` with correct denomination when exchange reports fees. ~35 cases.
 - `test_execution_router.py`: Test that `route(notional=500, profile=...)` returns a `LimitRoute` for small notional. Test that a profile with `rfq_mode="hybrid"` first attempts RFQ (mock `rfq.request_quote()` returning a quote), and on timeout falls back to limit. Test that `rfq_mode="always"` skips limit entirely. Test `rfq_mode="never"` (default) never calls RFQ. ~20 cases.
 
 **Live test (Deribit testnet):** `tests/live/test_fill_live.py` — Place a real limit order on a deep-OTM BTC option via `FillManager` with a 1-phase aggressive profile. Use a price far below the ask so it rests in the book without filling. Verify `OrderManager.get_open_orders()` shows the order. Then cancel it. Verify it disappears. This validates the full place → track → cancel path against the real API. Then test an actual fill: pick the cheapest deep-OTM option (e.g. 0.0001 BTC), place an aggressive buy at the ask. Wait up to 10 seconds for fill. If filled, verify `FillResult.legs[0].fill_price` is populated and `FillResult.legs[0].fee` is non-None (Deribit always returns fee data on fills). Use a `finally` block to cancel any unfilled orders. Mark `@pytest.mark.live`.
@@ -1172,7 +1210,7 @@ Run `python -m pytest tests/ -v`. All existing tests updated to the new types mu
 | 3.2 | `PricingEngine.compute()` returns `Price(amount, currency)` instead of `float` |
 | 3.3 | `FillResult.legs[].fill_price` becomes `Optional[Price]` |
 | 3.4 | `OrderManager.place_order()` accepts `Price` and validates denomination before calling executor |
-| 3.5 | `TradeLeg.fill_price` — decide: typed `Price` field, or keep `float` + add `fill_price_currency` alongside. Either way, ensure PnL computation handles denomination. |
+| 3.5 | `TradeLeg.fill_price` becomes `Optional[Price]` (decision made in §5.2). Update all consumers to use `fill_price.amount` or `float(fill_price)` where they previously used the bare float. Ensure `total_entry_cost()` / `total_exit_cost()` operate in native denomination. |
 | 3.6 | Delete the BTC plausibility guard from pricing (it's now redundant — denomination is validated at placement) |
 | 3.7 | Add tests: attempt to submit a USD price to Deribit → expect rejection |
 
@@ -1184,7 +1222,8 @@ Run `python -m pytest tests/ -v`. Focus on the denomination boundary:
 
 - Update `test_pricing_engine.py`: every `PricingEngine.compute()` call now returns `Price(amount, currency)` instead of `float`. Update all assertions. Add new cases: construct an `OrderbookSnapshot` with `currency=Currency.BTC`, verify returned price has `currency=Currency.BTC`. Same for `Currency.USD`.
 - New cases in `test_fill_manager.py` or `test_currency.py`: call `OrderManager.place_order(price=Price(3200.0, Currency.USD), exchange="deribit")` → must raise `DenominationError` because Deribit expects BTC. Call with `Price(0.05, Currency.BTC)` → must succeed (mock the executor). This is the key safety gate.
-- Regression: run the full `test_lifecycle_engine.py` suite. The `FillResult` objects now carry `Price` instead of `float` in `fill_price` — verify PnL computation still works by checking `trade.pnl_usd` against expected values with known index prices.
+- Regression: run the full `test_lifecycle_engine.py` suite. The `FillResult` objects now carry `Price` instead of `float` in `fill_price` — verify PnL computation still works by checking `trade.realized_pnl` (native `Price`) and `trade.realized_pnl_usd` against expected values with known index prices.
+- New: test that `trade.currency` is set correctly at creation (e.g. `Currency.BTC` for Deribit trades) and that `to_dict()` → `from_dict()` round-trips the `currency` field and all `Price` objects correctly.
 
 **Live test (Deribit testnet):** In `tests/live/test_denomination_live.py` — Fetch a real BTC option orderbook. Pass it through `PricingEngine.compute(ob, mode="fair", side="sell")`. Take the returned `Price` and pass it to `OrderManager.place_order()`. Verify the order is accepted by Deribit (it should be — the denomination is correct). Cancel immediately. Then construct a bogus `Price(3200.0, Currency.USD)` for the same symbol and attempt `place_order()` — verify it raises `DenominationError` locally (never reaches the API). This proves the guard works against a real exchange context. Mark `@pytest.mark.live`.
 
@@ -1210,7 +1249,7 @@ Run `python -m pytest tests/ -v`. Strategy-level tests:
 
 - For each of the 3 strategies (`short_strangle_delta_tp`, `put_sell_80dte`, `long_strangle_index_move`), verify the strategy's `build_execution_config()` (or equivalent) resolves to the correct named profile from `execution_profiles.toml`. Mock the profile loader and assert the returned `ExecutionProfile` has the expected number of phases, pricing modes, and flags (`open_atomic`, `close_best_effort`).
 - Test per-slot override: load a slot TOML that overrides `open_phase_1.duration_seconds = 120`, verify the resolved profile reflects the override while other fields are unchanged.
-- Test Telegram message formatting: mock a completed trade with `open_fees=FillFees(0.0003, "BTC")` and `close_fees=FillFees(0.0002, "BTC")`, render the close message, assert it contains the fee amounts and USD equivalent.
+- Test Telegram message formatting: mock a completed trade with `open_fees=Price(0.0003, Currency.BTC)` and `close_fees=Price(0.0002, Currency.BTC)`, render the close message, assert it contains both the native fee amounts (BTC) and USD equivalent.
 - Regression: run all existing strategy tests (`test_put_sell_80dte.py`, `test_short_strangle_delta.py`, etc.) — they must pass with the new profile-based execution path.
 
 **Live test (Deribit testnet):** `tests/live/test_strategy_live.py` — Run `put_sell_80dte` through a single open cycle on Deribit testnet. Use the real `passive_open_3phase` profile loaded from TOML. Pick a deep-OTM put (~10 delta) with >60 DTE. Execute the 3-phase open with real orderbook data and real limit orders. The test should:
@@ -1239,7 +1278,7 @@ This does NOT need to result in a fill — it validates the phase machinery agai
 
 Run both suites: `python -m pytest tests/ -v` (fast, ~2s) and `python -m pytest tests/live/ -m live -v` (testnet, ~60s).
 
-- Fast suite: all ~260+ tests pass (original 244 + new execution tests). Zero import errors — verify no code references deleted modules (`ExecutionParams`, `ExecutionPhase`, `LimitFillManager`, `execution_router`).
+- Fast suite: all ~370+ tests pass (original ~330 + new execution tests). Zero import errors — verify no code references deleted modules (`ExecutionParams`, `ExecutionPhase`, `LimitFillManager`, `execution_router`).
 - Logging check: run a mock lifecycle tick in a test that captures `ct.execution` log output (use `logging` handler capture). Verify the structured JSON contains `fill_status`, `legs`, `fee_total`, `denomination` keys.
 - Cleanup validation: `grep -r "ExecutionParams\|ExecutionPhase\|LimitFillManager" *.py strategies/ execution/` must return zero hits outside `archive/`.
 
@@ -1248,7 +1287,7 @@ Run both suites: `python -m pytest tests/ -v` (fast, ~2s) and `python -m pytest 
 2. Open: run the `passive_open_3phase` profile. Place a sell at the ask (aggressive, to get filled). Wait up to 15s for fill.
 3. Verify: `FillResult.status == FILLED`, `FillResult.legs[0].fee` is not None, `trade.open_fees` is populated.
 4. Close: immediately trigger close using `sl_close_3phase` profile. Place a buy at the ask (aggressive). Wait up to 15s.
-5. Verify: `trade.close_fees` is populated, `trade.total_fee_usd` > 0, `trade.pnl_usd` is a finite number.
+5. Verify: `trade.close_fees` is populated, `trade.total_fees_usd` > 0, `trade.realized_pnl` is a `Price` with `currency == Currency.BTC`, and `trade.realized_pnl_usd` is a finite number.
 6. Teardown: if any orders remain open, cancel them. If a position remains, close at market.
 This is the ultimate integration test — it exercises pricing, fill management, fee capture, denomination safety, profile loading, and lifecycle state all against the real Deribit testnet. Mark `@pytest.mark.live`. It's fine if it costs a small amount of testnet balance.
 
@@ -1268,7 +1307,7 @@ See the **"Testing after Phase N"** blocks in Section 14 for detailed per-phase 
 |-----------|-------------------|------|-------|
 | `tests/test_pricing_engine.py` | `execution/pricing.py` | unit | 1 |
 | `tests/test_currency.py` | `execution/currency.py` | unit | 1 |
-| `tests/test_fees.py` | `execution/fees.py` | unit | 1 |
+| `tests/test_fees.py` | `execution/fees.py` + `Price` fee usage | unit | 1 |
 | `tests/test_execution_profiles.py` | `execution/profiles.py` | unit | 1 |
 | `tests/test_fill_manager.py` | `execution/fill_manager.py` | unit | 2 |
 | `tests/test_execution_router.py` | `execution/router.py` | unit | 2 |
@@ -1328,14 +1367,14 @@ python -m pytest tests/live/test_pricing_live.py -m live -v
 | `execution/fill_result.py` | FillResult, LegFillSnapshot, FillStatus | ~100 |
 | `execution/profiles.py` | ExecutionProfile, PhaseConfig, TOML loader, hybrid RFQ fields | ~120 |
 | `execution/router.py` | ExecutionRouter — limit / RFQ / hybrid routing | ~250 |
-| `execution/fees.py` | FillFees, FeeSummary, fee aggregation helpers | ~60 |
+| `execution/fees.py` | Fee extraction helpers, exchange response parsing | ~40 |
 | `execution_profiles.toml` | Default execution profiles for 3 active strategies | ~100 |
 | `tests/test_pricing_engine.py` | PricingEngine unit tests | ~200 |
 | `tests/test_fill_manager.py` | FillManager unit tests (phase transitions, requote, N-leg) | ~150 |
 | `tests/test_fill_result.py` | FillResult unit tests (fee aggregation, multi-leg sync) | ~60 |
 | `tests/test_execution_profiles.py` | Profile loading/override/hybrid RFQ tests | ~60 |
 | `tests/test_currency.py` | Price/Currency denomination + arithmetic tests | ~60 |
-| `tests/test_fees.py` | FillFees construction, aggregation, USD conversion | ~40 |
+| `tests/test_fees.py` | Fee extraction from exchange responses, Price fee usage, USD conversion | ~40 |
 | `tests/test_execution_router.py` | Router routing logic: limit, RFQ, hybrid fallback | ~80 |
 | `tests/test_multileg_execution.py` | 3-leg butterfly, 4-leg iron condor lifecycle | ~80 |
 | `tests/live/test_pricing_live.py` | Live: PricingEngine vs real Deribit orderbook | ~40 |
@@ -1351,7 +1390,7 @@ python -m pytest tests/live/test_pricing_live.py -m live -v
 | `trade_execution.py` | Shrinks from 1040 → ~120 lines (only `TradeExecutor` thin wrapper remains) |
 | `order_manager.py` | Accept `Price` in `place_order()`, add denomination assertion, capture fee from response |
 | `lifecycle_engine.py` | Use `FillResult.sync_to_trade_legs()`, enum status checks, emit to `ct.execution` logger |
-| `trade_lifecycle.py` | Add typed fields (`open_fees`, `close_fees`, `total_fee_usd`), remove I/O methods |
+| `trade_lifecycle.py` | Add `currency: Currency` field. Add typed fields (`open_fees`, `close_fees`, `total_fees` as `Price`, plus `*_usd` variants). Replace bare `realized_pnl: float` with `realized_pnl: Optional[Price]` + `realized_pnl_usd: Optional[float]`. Update `to_dict()` / `from_dict()` for `Price` serialization. Remove I/O methods |
 | `execution_router.py` | Deleted (moved to `execution/router.py`) |
 | `rfq.py` | Add `RfqResult.fee`, integrate with hybrid fallback in `execution/router.py` |
 | `strategy.py` | Add profile resolution in `StrategyConfig` / `StrategyRunner` |

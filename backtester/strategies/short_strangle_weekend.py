@@ -120,7 +120,7 @@ class ShortStrangleWeekend:
     """Sell N-DTE OTM strangle on weekend days only; exit on TP, SL, time exit, or expiry."""
 
     name = "short_strangle_weekend"
-    DATE_RANGE = ("2025-12-11", "2026-04-15")
+    DATE_RANGE = ("2025-05-01", "2026-04-15")
     DESCRIPTION = (
         "Sells a strangle on a Deribit expiry N calendar days ahead (dte=1/2), "
         "with legs chosen by target delta, but entries are restricted to weekend days. "
@@ -131,12 +131,12 @@ class ShortStrangleWeekend:
     )
 
     PARAM_GRID = {
-        "dte":              [1,2],
-        "delta":            [0.05, 0.10, 0.15, 0.20, 0.25, 0.30],
-        "entry_hour":       [1,4,8],
-        "stop_loss_pct":    [0, 3.0, 5.0, 7.0],
+        "dte":              [1],
+        "delta":            [0.05, 0.10, 0.15],
+        "entry_hour":       [3,6,9,12],
+        "stop_loss_pct":    [0, 5.0, 7.0],
         "take_profit_pct":  [0, 0.5, 0.8],
-        "max_hold_hours":   [36],
+        "max_hold_hours":   [0,12,18,24,30],
         "open_days":        ["sunday"],
         "min_otm_pct":      [0],
     }
@@ -267,9 +267,11 @@ class ShortStrangleWeekend:
         put_q  = state.get_option(expiry, pos.metadata["put_strike"], False)
         if call_q is None or put_q is None:
             return None
-        if call_q.ask <= 0 or put_q.ask <= 0:
-            return None
-        current_usd = call_q.ask_usd + put_q.ask_usd
+        # ask == 0 means the option is essentially worthless (no market maker quoting).
+        # Treat as 0 rather than skipping — a zero ask is a genuine TP signal.
+        call_ask_usd = call_q.ask_usd if call_q.ask > 0 else 0.0
+        put_ask_usd  = put_q.ask_usd  if put_q.ask  > 0 else 0.0
+        current_usd = call_ask_usd + put_ask_usd
         _ep = pos.entry_price_usd
         profit_ratio = (_ep - current_usd) / (_ep if _ep > 0.01 else 0.01)
         if profit_ratio >= self._tp_pct:
@@ -357,12 +359,16 @@ class ShortStrangleWeekend:
             call_exit_usd = max(0.0, state.spot - call_strike)
             put_exit_usd  = max(0.0, put_strike  - state.spot)
         else:
+            # Buy back at ask; fall back to Deribit min-tick (0.0001 BTC) on
+            # missing/zero ask — options quoted at 0 are essentially worthless
+            # but are never free to close on Deribit.
+            _min_tick_usd = 0.0001 * state.spot
             call_q = state.get_option(expiry, call_strike, True)
             put_q  = state.get_option(expiry, put_strike,  False)
             call_exit_usd = (call_q.ask_usd if call_q and call_q.ask > 0
-                             else pos.legs[0]["entry_price_usd"])
+                             else _min_tick_usd)
             put_exit_usd  = (put_q.ask_usd if put_q and put_q.ask > 0
-                             else pos.legs[1]["entry_price_usd"])
+                             else _min_tick_usd)
 
         exit_usd   = call_exit_usd + put_exit_usd
         fees_close = 0.0 if reason == "expiry" else (

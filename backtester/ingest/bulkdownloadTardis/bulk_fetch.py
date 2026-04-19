@@ -353,7 +353,7 @@ def bulk_fetch(
     to_date,            # type: str
     worker="?",         # type: str
     api_key=None,       # type: Optional[str]
-    max_dte=28,         # type: int
+    max_dte=700,        # type: int
     keep_raw=False,     # type: bool
     data_dir=DATA_DIR,  # type: str
     day_retries=3,      # type: int
@@ -368,7 +368,7 @@ def bulk_fetch(
         to_date:     End of range YYYY-MM-DD (inclusive, newest, processed first).
         worker:      Label for this worker (A/B/C/D) — used only for log headings.
         api_key:     Tardis.dev API key. Falls back to TARDIS_API_KEY env var.
-        max_dte:     Max DTE to include in snapshots (default 28).
+        max_dte:     Max DTE to include in snapshots (default 700 = no practical cap).
         keep_raw:    Keep .csv.gz after extraction (default False).
         data_dir:    Directory for all files.
         day_retries: Day-level retry count before marking a day failed.
@@ -455,7 +455,7 @@ def main():
                         help="Worker label A/B/C/D (for log output)")
     parser.add_argument("--api-key", default=None,
                         help="Tardis.dev API key (or set TARDIS_API_KEY env var)")
-    parser.add_argument("--max-dte", type=int, default=28,
+    parser.add_argument("--max-dte", type=int, default=700,
                         help="Max calendar DTE to include (default 28)")
     parser.add_argument("--keep-raw", action="store_true",
                         help="Keep OPTIONS.csv.gz after extraction")

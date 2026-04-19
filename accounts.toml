@@ -1,5 +1,5 @@
 # ===========================================================================
-# CoincallTrader — Named Accounts
+# CryoTrader — Named Accounts
 #
 # Maps friendly account names to the env-var names that hold the actual
 # API credentials (in .env).  No secrets here — just pointers.
@@ -24,6 +24,12 @@ exchange = "deribit"
 environment = "production"
 api_key_env = "DERIBIT_CLIENT_ID_PROD"
 api_secret_env = "DERIBIT_CLIENT_SECRET_PROD"
+
+[deribit-big]
+exchange = "deribit"
+environment = "production"
+api_key_env = "DERIBIT_CLIENT_ID_BIG"
+api_secret_env = "DERIBIT_CLIENT_SECRET_BIG"
 
 [coincall-test]
 exchange = "coincall"

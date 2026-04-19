@@ -26,8 +26,8 @@ realized_pnl = -(total_entry_cost + total_exit_cost)
 
 This has three weaknesses:
 
-1. **Fees are completely ignored.** The exchange charges a maker/taker fee on every fill. These are non-trivial (typically 0.03–0.05% per leg). The app doesn't know them and doesn't track them.
-2. **Fill prices are estimated.** `TradeLeg.fill_price` comes from polling `get_order_status()` during the fill-wait loop, not from the exchange's confirmed trade record. Edge cases (partial fills, requotes, rapid fills) can leave the recorded price slightly off.
+1. **Fees are completely ignored.** The exchange charges a maker/taker fee on every fill. These are non-trivial (typically 0.03–0.05% per leg). The app doesn't know them and doesn't track them. **Empirical finding (Apr 13-19 slot-02 analysis):** Over 5 short-strangle trades, total fees were **0.00751 BTC ($565)** — roughly 10.3% of the gross premium collected (0.007 BTC avg per trade). For the one profitable-only subset (Tue-Fri), fees consumed 22% of gross profit. Fees are material and must be tracked.
+2. **Fill prices are estimated.** `TradeLeg.fill_price` comes from polling `get_order_status()` during the fill-wait loop, not from the exchange's confirmed trade record. Edge cases (partial fills, requotes, rapid fills) can leave the recorded price slightly off. **Empirical finding:** For slot-02's Apr 17-18 trade, the strategy recorded fill prices of 0.0007 and 0.0005 BTC per contract — these matched Deribit's confirmed prices exactly. However, the strategy's `entry_cost` (simple `qty × price`) was **-0.006 BTC** while Deribit's actual account cashflow was **+0.00538 BTC** (net of fees). The difference of 0.00062 BTC matches the fees precisely. So fill prices are accurate, but the PnL calculation is not, because it ignores fees.
 3. **No durable per-fill audit trail.** The only permanent record is the `trade_history.jsonl` line written at close, which carries whatever the app happened to capture. There is no link back to the exchange's own trade records.
 
 Both exchanges maintain a **trade log** — a server-side, immutable record of every fill event. It is the real source of truth: confirmed qty, confirmed price, and confirmed fee. The app should use this log to produce its final accounting numbers.
@@ -98,6 +98,7 @@ class TradeLeg:
     exchange_trade_ids: List[str] = field(default_factory=list)
     confirmed_fill_price: Optional[float] = None   # exchange-confirmed avg price
     fee_usd: Optional[float] = None                # total fee in USD for this leg
+    fee_btc: Optional[float] = None                # total fee in BTC (Deribit-native; None for Coincall)
 ```
 
 Rationale for `exchange_trade_ids` as a list: a single order can generate multiple partial fills in the exchange trade log, each with its own `trade_id`.
@@ -133,6 +134,8 @@ class TradeLogEntry:
     qty: float          # contracts
     price_usd: float    # always USD (converted if needed)
     fee_usd: float      # always USD
+    fee_native: float   # fee in exchange's native currency (BTC for Deribit, USD for Coincall)
+    fee_currency: str   # "BTC" or "USD"
     timestamp: float    # unix epoch
 ```
 
@@ -210,7 +213,9 @@ Deribit supports direct orderId lookup, so `fill_time_hint` is ignored.
 
 - **Endpoint:** `private/get_user_trades_by_order`, params `{ "order_id": "...", "sorting": "asc" }`
 - **Field mapping:** `trade_id → exchange_trade_id`, `amount → qty`, `direction → side`, `timestamp (ms) → timestamp (epoch)`
-- **Currency conversion (all in BTC):** `price_usd = price_btc × btc_index_price`, `fee_usd = fee_btc × btc_index_price`. Index price fetched via injected `ExchangeMarketData.get_index_price()` at reconciliation time.
+- **Currency: BTC-native with USD conversion.** Deribit returns all option prices and fees in BTC. Store both: `fee_btc` (native, exact) and `fee_usd` (converted). The `change` field from the transaction log is the net account cashflow *after fees* — useful as a cross-check but **not** as the primary data source (it aggregates partial fills into a single amount). Use individual trade records from `get_user_trades_by_order` instead.
+- **Partial fill aggregation:** A single 5-contract order may fill in multiple chunks (e.g. 3.8 + 0.6 + 0.6 as observed in the Apr 17 trade). Each chunk is a separate trade record with its own `trade_id`, `amount`, `price`, and `fee`. The adapter must sum fees and compute qty-weighted avg price across all chunks.
+- **Delivery vs. trade close:** Expiry-settled options appear as `type=delivery` in the transaction log (not as trades). These have `price=0.0`, `change=0.0`, and no fee. The adapter must recognize deliveries and **not** query `get_user_trades_by_order` for them — there is no order_id.
 - **Empty list returned** if the API call fails or returns no trades (triggers reconciler retry).
 
 ### `exchanges/coincall/trade_log.py` — `CoincallTradeLog`
@@ -370,3 +375,37 @@ Coincall has no orderId filter; the adapter implements the time-window pattern i
 1. **Time-window strategy for Coincall (and any exchange without orderId filtering):** The `fill_time_hint` passed to `CoincallTradeLog.get_fills_for_order()` defines the query window. Default proposal: `hint ± 90s`, doubling on each retry. Confirm this is acceptable before implementation.
 2. **Deribit BTC index at reconciliation time:** Is using `get_index_price()` at the moment of reconciliation (potentially 60s after close) accurate enough, or should we snapshot the BTC price at the exact moment of close and store it in `TradeLifecycle`?
 3. **Notification threshold:** What PnL delta justifies sending a reconciliation Telegram update? Suggested default: `$1.00`. Configurable via `RECONCILE_NOTIFY_THRESHOLD_USD` env var?
+
+---
+
+## Lessons from Production Analysis (Apr 13-19, 2026 — slot-02)
+
+The following findings were observed during a manual reconciliation of slot-02 (short_strangle_delta_tp on deribit-big) and should inform the implementation:
+
+### 1. Fee magnitude is material
+- 5 trades over the week incurred **0.00751 BTC ($565)** in total fees.
+- The strategy's gross PnL for profitable trades (Tue-Fri) was +0.02831 BTC; fees consumed **26.5%** of that.
+- For the single trade visible in the strategy log (Trade #5), reported PnL was 0.006 BTC but actual net was 0.00538 BTC — a **10.3% overstatement**.
+- **Implication:** Fee tracking is not a nice-to-have. It's required for accurate performance measurement.
+
+### 2. BTC-native storage is essential
+- Deribit fees are denominated in BTC and are tiny fractions (e.g. 0.00027707 BTC for a single fill). Converting to USD at reconciliation time introduces rounding noise.
+- **Decision:** Store `fee_btc` (native, exact) alongside `fee_usd` (converted). The `TradeLogEntry` and `TradeLeg` models should carry both.
+- Minimum precision: 8 decimal places for BTC values (satoshi resolution).
+
+### 3. Partial fills generate multiple trade records
+- The Apr 17 open of 5× BTC-18APR26-79000-C filled as 3 chunks: 3.8 + 0.6 + 0.6. Each has its own fee.
+- The Apr 17 open of 5× BTC-18APR26-76000-P filled as 3 chunks: 1.8 + 2.7 + 0.5.
+- The adapter must handle N fills per order and aggregate correctly: qty-weighted avg price, summed fees.
+
+### 4. Transaction log `change` field ≠ simple qty × price
+- The `change` field in Deribit's transaction log is the net cashflow **after deducting fees**. For example: selling 5× at 0.0007 gives `change = 0.00313543`, not `5 × 0.0007 = 0.0035`. The difference is the fee.
+- This is useful as a **cross-check** but the reconciler should compute from individual trade records, not from `change`.
+
+### 5. Delivery events have no order/trade ID
+- Options expiring worthless appear as `type=delivery` with `price=0.0`, `change=0.0`, `side=close buy`, and **no order_id**.
+- The reconciler's expiry-settled path is correct: skip close-leg reconciliation entirely for deliveries. There is nothing to query.
+
+### 6. Strategy log durability
+- A redeploy on Apr 17 wiped trade_history.jsonl, losing trades #1-4. Only Deribit's own records preserved the full history.
+- **Implication:** This reinforces the value of exchange-side reconciliation as the authoritative record. It also suggests that `trade_history.jsonl` should survive redeploys (addressed separately — log rotation / persistence to a durable path).
