@@ -1,0 +1,64 @@
+# short_strangle_weekend_v1.toml
+# ── Experiment: Short Strangle Weekend — Candidate v1 ────────────
+#
+# Step 2  (sensitivity):
+#   python -m backtester.run --experiment short_strangle_weekend_v1 --mode sensitivity
+#
+# Step 3  (walk-forward validation):
+#   python -m backtester.run --experiment short_strangle_weekend_v1 --mode wfo
+#
+# Candidate found from discovery run 2026-04-22 (combo #1, 2025-11-20 → 2026-04-21):
+#   delta=0.15, dte=1, entry_hour=18, max_hold_hours=16
+#   stop_loss_pct=0, take_profit_pct=0, open_days=friday, min_otm_pct=0
+#   Sharpe=7.07, Sortino=19.65, Calmar=13.60, R²=0.99, PnL=$3,427
+
+strategy = "weekend_strangle"
+
+# ── Sensitivity analysis ─────────────────────────────────────────
+[sensitivity]
+
+steps = 5
+
+[sensitivity.best]
+dte              = 1
+delta            = 0.15
+entry_hour       = 18
+max_hold_hours   = 16
+stop_loss_pct    = 0
+take_profit_pct  = 0
+open_days        = "friday"
+min_otm_pct      = 0
+
+[sensitivity.deviation.dte]
+type = "fixed"
+
+[sensitivity.deviation.delta]
+type   = "pct"
+amount = 10        # ±10% → [0.135, 0.143, 0.15, 0.158, 0.165]
+
+[sensitivity.deviation.entry_hour]
+type   = "abs"
+amount = 2         # ±2 hours → [16, 17, 18, 19, 20]
+
+[sensitivity.deviation.max_hold_hours]
+type   = "abs"
+amount = 4         # ±4 hours → [8, 10, 12, 14, 16] (clamped to grid)
+
+[sensitivity.deviation.stop_loss_pct]
+type = "fixed"     # 0 = no SL (boundary value; can't go negative)
+
+[sensitivity.deviation.take_profit_pct]
+type = "fixed"     # 0 = no TP (boundary value; can't go negative)
+
+[sensitivity.deviation.open_days]
+type = "fixed"
+
+[sensitivity.deviation.min_otm_pct]
+type = "fixed"
+
+
+# ── Walk-forward validation ──────────────────────────────────────
+[wfo]
+is_days   = 60    # In-sample window (calendar days)
+oos_days  = 20    # Out-of-sample window (calendar days)
+step_days = 20    # Window shift per step
